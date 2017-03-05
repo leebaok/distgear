@@ -7,6 +7,7 @@ async def work(msg):
     print('after sleep')
     await push.send_multipart([str.encode('event done')])
 
+# create new coroutine for every msg/event from sub
 async def subin():
     while(True):
         msg = await sub.recv_multipart()
