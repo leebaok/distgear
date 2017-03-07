@@ -1,3 +1,12 @@
+# -*- coding: utf-8 -*-
+"""
+    try_aiohttp_zmqloop.py
+    ~~~~~~~~~~~~~~~~~~~~~
+    create http server running in zmq event loop
+
+    Author: Bao Li
+"""
+
 import asyncio
 from aiohttp import web
 import zmq.asyncio

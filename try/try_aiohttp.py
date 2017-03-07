@@ -1,3 +1,12 @@
+# -*- coding: utf-8 -*-
+"""
+    try_aiohttp.py
+    ~~~~~~~~~~~~~~
+    create a http server running in asyncio event loop
+
+    Author: Bao Li
+"""
+
 import asyncio
 from aiohttp import web
 

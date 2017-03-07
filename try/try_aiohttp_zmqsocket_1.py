@@ -1,3 +1,17 @@
+# -*- coding: utf-8 -*-
+"""
+    try_aiohttp_zmqsocket_1.py / master
+    ~~~~~~~~~~~~~~~~~~~~~~~~~
+            Master              Worker
+         +----------+        +---------+
+         |         PUB ---> SUB        |
+    --> Http        |        |         |
+         |        PULL <--- PUSH       |
+         +----------+        +---------+
+
+    Author: Bao Li
+""" 
+
 import asyncio
 from aiohttp import web
 import zmq.asyncio
@@ -57,4 +71,16 @@ try:
     loop.run_forever()
 except KeyboardInterrupt:
     pass
+
+tasks = asyncio.Task.all_tasks(loop)
+for task in tasks:
+    task.cancel()
+
+print('-------------------------------------------------')
+print(tasks)
+print('-------------------------------------------------')
+
+loop.run_until_complete(asyncio.wait(list(tasks)))
+
+print(tasks)
 loop.close()
