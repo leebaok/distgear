@@ -3,9 +3,9 @@
 import requests
 import json
 
-print('----- Event : test -----')
+print('----- Event : myevent -----')
 r = requests.post('http://localhost:8000/', data = json.dumps({ 
-                            'event':'test', 
+                            'event':'myevent', 
                             'parameters':{  
                                             'para1':'one',
                                             'para2':'two'

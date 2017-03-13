@@ -1,17 +1,23 @@
 # -*- coding: utf-8 -*-
 
 import sys
+import asyncio
 
 sys.path.append("..")
 from distgear.app import Worker
 
-worker = Worker('w1', '127.0.0.1')
+if len(sys.argv)==1:
+    print('worker.py NAME')
+    exit(1)
+name = sys.argv[1]
+worker = Worker(name, '127.0.0.1')
 
 # define handlers for master
-@worker.register('test')
+@worker.register('myaction')
 async def testaction(paras):
     print('<worker action>')
     print(paras)
-    return 'action done'
+    await asyncio.sleep(3)
+    return 'my action done'
 
 worker.start()

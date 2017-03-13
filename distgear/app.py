@@ -4,10 +4,10 @@
     ~~~~~~~~~~~~~~~~~~~~~~~~~
               Master                  Worker
          +--------------+        +-------------+
-         |    Handler   |        |   Handler   |
+         |    Handler   |        |   Handler   |    ==> User Provide
          +--------------+        +-------------+ 
          |             PUB ---> SUB            |
-    --> HTTP   Loop     |        |    Loop     |
+    --> HTTP   Loop     |        |    Loop     |    ==> DistGear Provide
          |            PULL <--- PUSH           |
          +--------------+        +-------------+
 
@@ -19,6 +19,7 @@ from aiohttp import web, ClientSession
 import zmq.asyncio
 import json
 import sys,inspect
+import psutil
 
 def output(self, log):
     if self:
@@ -37,19 +38,19 @@ class Master(object):
         self.event_handlers = {'_NodeJoin':self._nodejoin}
         self.workers = []
         self.workerinfo = {}
-        self.count = 0
         self.pending = {}
 
     async def _nodejoin(self, event, master):
         paras = event.paras
         if 'name' not in paras:
-            return {'status':'fail', 'result':'get work name failed'}
+            return {'status':'fail', 'result':'get worker name failed'}
         name = paras['name']
-        event.add_commands([(name, 'test', 'none')])
+        event.add_commands([(name, '_test', 'none')])
         result = await event.run()
         result = result[0]
         if result == 'test':
             self.workers.append(name)
+            output(self, 'new node join: '+name)
             return {'status':'success', 'result':'work join success'}
         else:
             return {'status':'fail', 'result':'work reply failed'}
@@ -68,6 +69,7 @@ class Master(object):
         self.pull_sock = self.zmq_ctx.socket(zmq.PULL)
         self.pull_sock.bind('tcp://'+self.addr+':'+str(self.pull_port))
         asyncio.ensure_future(self._pull_in())
+        asyncio.ensure_future(self._heartbeat())
         try:
             self.loop.run_forever()
         except KeyboardInterrupt:
@@ -82,7 +84,6 @@ class Master(object):
         self.loop.close()
 
     async def _http_handler(self, request):
-        self.count = self.count + 1
         output(self, 'url : '+str(request.url))
         text = await request.text()
         output(self, 'request content : '+text)
@@ -101,9 +102,21 @@ class Master(object):
         else:
             output(self, 'call event handler')
             event = Event(data['event'], data['parameters'], self)
+            output(self, 'process event:%s with id: %s' % (data['event'], str(event.event_id)))
             result = await self.event_handlers[data['event']](event, self)
             output(self, 'result from handler: '+ str(result) )
             return web.Response(text = json.dumps(result))
+    
+    async def _heartbeat(self):
+        while(True):
+            await asyncio.sleep(3)
+            nodes = [ node for node in self.workers ]
+            event = Event('_HeartBeat', 'Nothing', self)
+            event.add_commands([ (node, '_heartbeat', 'Nothing') for node in nodes])
+            result = await event.run()
+            for index, node in enumerate(nodes):
+                self.workerinfo[node] = result[index]
+            output(self, 'Worker Info:'+str(self.workerinfo))
 
     def add_pending(self, cmd_id, future):
         self.pending[cmd_id] = future
@@ -137,9 +150,9 @@ class Master(object):
         return decorator
 
 class Event(object):
-    def __init__(self, name, paras,master):
+    def __init__(self, name, paras, master):
         self.master = master
-        self.event_id = master.count
+        self.event_id = master.loop.time()
         self.name = name
         self.commands = []
         self.cmd_id = 0
@@ -151,6 +164,8 @@ class Event(object):
         self.commands = self.commands + commands 
     async def run(self):
         output(self, 'run commands: ' + str(self.commands))
+        if not self.commands:
+            return []
         #done, pending = asycnio.wait([ self._run_command(cmd) for cmd in self.commands ])
         tasks = [ asyncio.ensure_future(self._run_command(cmd)) for cmd in self.commands ]
         done, pending = await asyncio.wait(tasks)
@@ -160,10 +175,10 @@ class Event(object):
         """
             command : (node, action, parameters)
         """
-        output(self, 'run command: '+str(command))
         node, action, parameters = command
         self.cmd_id = self.cmd_id + 1
         actionid = str(self.event_id) + '-' + str(self.cmd_id)
+        output(self, 'run command: %s with id: %s' % (str(command), actionid))
         msg = json.dumps({'action':action, 'parameters':parameters, 'actionid':actionid})
         # send (topic, msg)
         await self.master.pub_sock.send_multipart([str.encode(node), str.encode(msg)])
@@ -180,11 +195,16 @@ class Worker(object):
         self.master_pub_port = 8001
         self.master_pull_port = 8002
         self.name = name
-        self.action_handlers = {'test':self.test}
+        self.action_handlers = {'_test':self.test, '_heartbeat':self.heartbeat}
         self.pending_handlers = {}
 
     async def test(self, paras):
         return 'test'
+
+    async def heartbeat(self, paras):
+        memload = psutil.virtual_memory().percent
+        cpuload = psutil.cpu_percent()
+        return { 'mem':memload, 'cpu':cpuload }
 
     def start(self):
         self.loop = zmq.asyncio.ZMQEventLoop()
