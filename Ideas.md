@@ -10,3 +10,7 @@ when we use asyncio eventloop to watch zmq sockets, we can do it in two ways:
 	we maybe have not data to write. so we need to do some more actions for 
 	writing.
 now we use the first method for zmq sockets. because it is easy to use.
+
+## should we support 'ALL' topic for pub-sub
+now we donot support 'ALL' topic for pub-sub. Because we donot know how to
+collect the results of 'ALL' type event

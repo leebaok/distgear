@@ -2,18 +2,20 @@
 """
     app.py
     ~~~~~~~~~~~~~~~~~~~~~~~~~
-            Master              Worker
-         +----------+        +---------+
-         |         PUB ---> SUB        |
-    --> Http        |        |         |
-         |        PULL <--- PUSH       |
-         +----------+        +---------+
+              Master                  Worker
+         +--------------+        +-------------+
+         |    Handler   |        |   Handler   |
+         +--------------+        +-------------+ 
+         |             PUB ---> SUB            |
+    --> HTTP   Loop     |        |    Loop     |
+         |            PULL <--- PUSH           |
+         +--------------+        +-------------+
 
     Author: Bao Li
 """ 
 
 import asyncio
-from aiohttp import web
+from aiohttp import web, ClientSession
 import zmq.asyncio
 import json
 import sys,inspect
@@ -32,11 +34,25 @@ class Master(object):
         self.http_port = 8000
         self.pub_port = 8001
         self.pull_port = 8002
-        self.event_handlers = {}
+        self.event_handlers = {'_NodeJoin':self._nodejoin}
         self.workers = []
         self.workerinfo = {}
         self.count = 0
         self.pending = {}
+
+    async def _nodejoin(self, event, master):
+        paras = event.paras
+        if 'name' not in paras:
+            return {'status':'fail', 'result':'get work name failed'}
+        name = paras['name']
+        event.add_commands([(name, 'test', 'none')])
+        result = await event.run()
+        result = result[0]
+        if result == 'test':
+            self.workers.append(name)
+            return {'status':'success', 'result':'work join success'}
+        else:
+            return {'status':'fail', 'result':'work reply failed'}
 
     def start(self):
         output(self, 'master start')
@@ -56,6 +72,9 @@ class Master(object):
             self.loop.run_forever()
         except KeyboardInterrupt:
             pass
+        self.stop()
+
+    def stop(self):
         tasks = asyncio.Task.all_tasks(self.loop)
         for task in tasks:
             task.cancel()
@@ -157,34 +176,59 @@ class Event(object):
 class Worker(object):
     def __init__(self, name, master_addr):
         self.master = master_addr
+        self.master_http_port = 8000
+        self.master_pub_port = 8001
+        self.master_pull_port = 8002
         self.name = name
-        self.sub_port = 8001
-        self.push_port = 8002
-        self.action_handlers = {}
+        self.action_handlers = {'test':self.test}
+        self.pending_handlers = {}
+
+    async def test(self, paras):
+        return 'test'
 
     def start(self):
         self.loop = zmq.asyncio.ZMQEventLoop()
         asyncio.set_event_loop(self.loop)
         self.zmq_ctx = zmq.asyncio.Context()
         self.sub_sock = self.zmq_ctx.socket(zmq.SUB)
-        self.sub_sock.connect('tcp://'+self.master+':'+str(self.sub_port))
+        self.sub_sock.connect('tcp://'+self.master+':'+str(self.master_pub_port))
         # set SUB topic is necessary (otherwise, no message will be received)
         self.sub_sock.setsockopt(zmq.SUBSCRIBE, str.encode(self.name))
         # 'all' event maybe not supported. because the result is not easy to collect
         #self.sub_sock.setsockopt(zmq.SUBSCRIBE, str.encode('all'))
         self.push_sock = self.zmq_ctx.socket(zmq.PUSH)
-        self.push_sock.connect('tcp://'+self.master+':'+str(self.push_port))
+        self.push_sock.connect('tcp://'+self.master+':'+str(self.master_pull_port))
         asyncio.ensure_future(self._sub_in())
+        asyncio.ensure_future(self._join())
         output(self, 'event loop runs')
         try:
             self.loop.run_forever()
         except KeyboardInterrupt:
             pass
+        self.stop()
+
+    def stop(self):
         tasks = asyncio.Task.all_tasks(self.loop)
         for task in tasks:
             task.cancel()
         self.loop.run_until_complete(asyncio.wait(list(tasks)))
         self.loop.close()
+
+    async def _join(self):
+        output(self, 'worker try to join master')
+        async with ClientSession() as session:
+            url = 'http://'+self.master+':'+str(self.master_http_port)
+            data = { 'event':'_NodeJoin', 'parameters':{'name':self.name} }
+            async with session.post(url, data=json.dumps(data)) as response:
+                result = await response.text()
+                result = json.loads(result)
+                if result['status'] == 'fail':
+                    output(self, 'join master failed')
+                    self.stop()
+                elif result['status'] == 'success':
+                    output(self, 'join master success')
+                    for key in self.pending_handlers:
+                        self.action_handlers[key] = self.pending_handlers[key]
 
     async def _sub_in(self):
         while(True):
@@ -195,13 +239,16 @@ class Worker(object):
             asyncio.ensure_future(self._run_action(action))
 
     async def _run_action(self, action):
-        result = await self.action_handlers[action['action']](action['parameters'])
-        action['result'] = result
+        if action['action'] not in self.action_handlers:
+            action['result'] = 'action not defined'
+        else:
+            result = await self.action_handlers[action['action']](action['parameters'])
+            action['result'] = result
         await self.push_sock.send_multipart([ str.encode(json.dumps(action)) ])
 
     def register(self, action):
         def decorator(func):
-            self.action_handlers[action] = func
+            self.pending_handlers[action] = func
             return func
         return decorator
 
