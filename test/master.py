@@ -9,7 +9,7 @@ from distgear.app import Master
 master = Master()
 
 # define handlers for master
-@master.register('myevent')
+@master.handleEvent('myevent')
 async def testevent(event, master):
     nodes = list(master.workerinfo.keys())
     if len(nodes)==0:

@@ -2,7 +2,8 @@
 
 ## Introduction
 DistGear is an event processing component for distributed environment.
-When you develop a distributed system, you need to control nodes and manage jobs. DistGear is to seperate the two work.
+When you develop a distributed system, you need to control nodes and manage jobs. 
+DistGear is to seperate the two work.
 You just need to think and write your job working code and
 leave messaging, heartbeat and etc to DistGear.
 

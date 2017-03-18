@@ -48,7 +48,7 @@ class Master(object):
         event.add_commands([(name, '_test', 'none')])
         result = await event.run()
         result = result[0]
-        if result == 'test':
+        if result['status'] == 'success':
             self.workers.append(name)
             output(self, 'new node join: '+name)
             return {'status':'success', 'result':'work join success'}
@@ -92,13 +92,13 @@ class Master(object):
             data = json.loads(text)
         except json.JSONDecodeError:
             output(self, 'text is not json format')
-            return web.Response(text = json.dumps({'result':'request invalid'}))
+            return web.Response(text = json.dumps({'status':'fail', 'result':'request invalid'}))
         if 'event' not in data or 'parameters' not in data:
             output(self, 'request invalid')
-            return web.Response(text = json.dumps({'result':'request invalid'}))
+            return web.Response(text = json.dumps({'status':'fail', 'result':'request invalid'}))
         elif data['event'] not in self.event_handlers:
             output(self, 'event not defined')
-            return web.Response(text = json.dumps({'result':'event undefined'}))
+            return web.Response(text = json.dumps({'status':'fail', 'result':'event undefined'}))
         else:
             output(self, 'call event handler')
             event = Event(data['event'], data['parameters'], self)
@@ -115,7 +115,10 @@ class Master(object):
             event.add_commands([ (node, '_heartbeat', 'Nothing') for node in nodes])
             result = await event.run()
             for index, node in enumerate(nodes):
-                self.workerinfo[node] = result[index]
+                if result[index]['status'] == 'success':
+                    self.workerinfo[node] = result[index]['result']
+                else:
+                    self.workerinfo[node] = None
             output(self, 'Worker Info:'+str(self.workerinfo))
 
     def add_pending(self, cmd_id, future):
@@ -131,16 +134,16 @@ class Master(object):
             cmd_id = result['actionid']
             future = self.pending[cmd_id]
             del self.pending[cmd_id]
-            future.set_result(result['result'])
+            future.set_result({'status':result['status'], 'result':result['result']})
      
-    def register(self, event):
+    def handleEvent(self, event):
         """
             app = Master()
-            @app.register('Event')
+            @app.handleEvent('Event')
             def handler():
                 pass
 
-            app.register(...) will return decorator
+            app.handleEvent(...) will return decorator
             @decorator will decorate func
             this is the normal method to decorate func when decorator has args
         """
@@ -199,12 +202,12 @@ class Worker(object):
         self.pending_handlers = {}
 
     async def test(self, paras):
-        return 'test'
+        return {'status':'success', 'result':'test'}
 
     async def heartbeat(self, paras):
         memload = psutil.virtual_memory().percent
         cpuload = psutil.cpu_percent()
-        return { 'mem':memload, 'cpu':cpuload }
+        return { 'status':'success', 'result': {'mem':memload, 'cpu':cpuload} }
 
     def start(self):
         self.loop = zmq.asyncio.ZMQEventLoop()
@@ -261,12 +264,14 @@ class Worker(object):
     async def _run_action(self, action):
         if action['action'] not in self.action_handlers:
             action['result'] = 'action not defined'
+            action['status'] = 'fail'
         else:
             result = await self.action_handlers[action['action']](action['parameters'])
-            action['result'] = result
+            action['result'] = result['result']
+            action['status'] = result['status']
         await self.push_sock.send_multipart([ str.encode(json.dumps(action)) ])
 
-    def register(self, action):
+    def doAction(self, action):
         def decorator(func):
             self.pending_handlers[action] = func
             return func

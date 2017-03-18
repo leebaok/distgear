@@ -13,11 +13,11 @@ name = sys.argv[1]
 worker = Worker(name, '127.0.0.1')
 
 # define handlers for master
-@worker.register('myaction')
+@worker.doAction('myaction')
 async def testaction(paras):
     print('<worker action>')
     print(paras)
     await asyncio.sleep(3)
-    return 'my action done'
+    return {'status':'success', 'result':'action done'}
 
 worker.start()
