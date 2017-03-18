@@ -7,22 +7,22 @@
 * Worker -- action handler
     * worker.doAction('action'), worker.undoAction('action')
     * handler(paras) : return json: {'status':'fail/success', 'result':result}
+
+## request and action format
 * request flow :
-
-
-    request:{'event':event, 'parameters':paras}
+```
+request:{'event':event, 'parameters':paras}
         | Master._http_handler
-    Event(event, paras)
+Event(event, paras)
         | EventHandler
-    {'status':'fail/success', 'result':result}
-
+{'status':'fail/success', 'result':result}
+```
 * action flow :
-
-
-    action : {'action':action, 'parameters':paras, 'actionid':id}
+```
+action : {'action':action, 'parameters':paras, 'actionid':id}
         | Worker._run_action
-    Action(paras)
+Action(paras)
         |
-    {'status':'fail/success', 'result':result}
-
+{'status':'fail/success', 'result':result}
+```
 * Event commands -- ToDo
