@@ -2,6 +2,7 @@
 
 import sys
 import asyncio
+import random
 
 sys.path.append("..")
 from distgear.app import Worker
@@ -15,9 +16,8 @@ worker = Worker(name, '127.0.0.1')
 # define handlers for master
 @worker.doAction('myaction')
 async def testaction(paras):
-    print('<worker action>')
-    print(paras)
-    await asyncio.sleep(3)
+    print('<Worker.myaction> : '+str(paras))
+    await asyncio.sleep(random.randint(1,10))
     return {'status':'success', 'result':'action done'}
 
 worker.start()

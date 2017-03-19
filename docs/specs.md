@@ -25,4 +25,15 @@ Action(paras)
         |
 {'status':'fail/success', 'result':result}
 ```
-* Event commands -- ToDo
+
+## Event commands
+```
+commands = {
+			'a':('node-1', 'act-1', 'para-1', []),
+			'b':('node-2', 'act-2', 'para-2', []),
+			'c':('node-3', 'act-3', 'para-3', ['a', 'b']),
+			'd':('node-4', 'act-4', 'para-4', ['c']),
+			'e':('node-5', 'act-5', 'para-5', []),
+			'f':('node-6', 'act-6', 'para-6', ['d', 'e']),
+		}
+```

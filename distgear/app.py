@@ -45,9 +45,10 @@ class Master(object):
         if 'name' not in paras:
             return {'status':'fail', 'result':'get worker name failed'}
         name = paras['name']
-        event.add_commands([(name, '_test', 'none')])
-        result = await event.run()
-        result = result[0]
+        commands = { 'a':(name, '_test', 'none', [])  }
+        event.add_commands(commands)
+        results = await event.run()
+        result = results['a']
         if result['status'] == 'success':
             self.workers.append(name)
             output(self, 'new node join: '+name)
@@ -109,14 +110,17 @@ class Master(object):
     
     async def _heartbeat(self):
         while(True):
-            await asyncio.sleep(3)
+            await asyncio.sleep(5)
             nodes = [ node for node in self.workers ]
             event = Event('_HeartBeat', 'Nothing', self)
-            event.add_commands([ (node, '_heartbeat', 'Nothing') for node in nodes])
-            result = await event.run()
-            for index, node in enumerate(nodes):
-                if result[index]['status'] == 'success':
-                    self.workerinfo[node] = result[index]['result']
+            commands={}
+            for node in nodes:
+                commands[node] = (node, '_heartbeat', 'Nothing', [])
+            event.add_commands(commands)
+            results = await event.run()
+            for node in nodes:
+                if results[node]['status'] == 'success':
+                    self.workerinfo[node] = results[node]['result']
                 else:
                     self.workerinfo[node] = None
             output(self, 'Worker Info:'+str(self.workerinfo))
@@ -157,23 +161,72 @@ class Event(object):
         self.master = master
         self.event_id = master.loop.time()
         self.name = name
-        self.commands = []
+        self.commands = {}
         self.cmd_id = 0
         self.paras = paras
     def add_commands(self, commands):
         """
-            commands now is list of command
+            commands now is dict, see specs.md 
         """
-        self.commands = self.commands + commands 
+        for key in commands:
+            self.commands[key] = commands[key]
     async def run(self):
         output(self, 'run commands: ' + str(self.commands))
-        if not self.commands:
-            return []
-        #done, pending = asycnio.wait([ self._run_command(cmd) for cmd in self.commands ])
-        tasks = [ asyncio.ensure_future(self._run_command(cmd)) for cmd in self.commands ]
-        done, pending = await asyncio.wait(tasks)
-        self.commands = []
-        return [ task.result() for task in tasks ]
+        """
+            commands :
+                'a':('node-1', 'act-1', 'para-1', [])
+                'b':('node-2', 'act-2', 'para-2', [])
+                'c':('node-3', 'act-3', 'para-3', ['a', 'b'])
+            build graph from commands:
+                command name       succeed       deps count
+                 'a'               ['c']            0
+                 'b'               ['c']            0
+                 'c'               []               2
+        """
+        graph = {}
+        ready = []
+        tasknames, pendtasks, results = {}, [], {}
+        for key in self.commands:
+            graph[key] = [ [], 0 ]
+        for key in self.commands:
+            deps = self.commands[key][3]
+            graph[key][1] = len(deps)
+            if graph[key][1] == 0:
+                ready.append(key)
+            for dep in deps:
+                graph[dep][0].append(key)
+        output(self, 'graph : '+str(graph))
+        """
+            ready is tasks ready to run
+            pendtasks is tasks running
+            so, 
+                step 1: run the ready tasks
+                step 2: wait for some task finish and update ready queue
+        """
+        while(ready or pendtasks):
+            output(self, 'ready:'+str(ready))
+            output(self, 'pendtasks:'+str(pendtasks))
+            for x in ready:
+                output(self, 'create task for:' + str(self.commands[x]))
+                task = asyncio.ensure_future(self._run_command(self.commands[x][:3]))
+                tasknames[task] = x
+                pendtasks.append(task)
+            ready.clear()
+            if pendtasks:
+                output(self, 'wait for:'+str(pendtasks))
+                done, pend = await asyncio.wait(pendtasks, return_when=asyncio.FIRST_COMPLETED)
+                output(self, 'tasks done:'+str(done))
+                for task in done:
+                    pendtasks.remove(task)
+                    name = tasknames[task]
+                    results[name] = task.result()
+                    for succ in graph[name][0]:
+                        graph[succ][1] = graph[succ][1]-1
+                        if graph[succ][1] == 0:
+                            ready.append(succ)
+        output(self, 'result:'+str(results))
+        return results
+
     async def _run_command(self, command):
         """
             command : (node, action, parameters)
