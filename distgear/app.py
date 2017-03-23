@@ -20,12 +20,7 @@ import zmq.asyncio
 import json
 import sys,inspect
 import psutil
-
-def output(self, log):
-    if self:
-        print(self.__class__.__name__+'.'+sys._getframe().f_back.f_code.co_name+' -- '+log)
-    else:
-        print(sys._getframe().f_back.f_code.co_name+' -- '+log)
+from log import logger
 
 
 class Master(object):
@@ -51,19 +46,19 @@ class Master(object):
         result = results['a']
         if result['status'] == 'success':
             self.workers.append(name)
-            output(self, 'new node join: '+name)
+            logger.info('new node join: %s', name)
             return {'status':'success', 'result':'work join success'}
         else:
             return {'status':'fail', 'result':'work reply failed'}
 
     def start(self):
-        output(self, 'master start')
+        logger.info('master start ...')
         self.loop = zmq.asyncio.ZMQEventLoop()
         asyncio.set_event_loop(self.loop)
         server = web.Server(self._http_handler)
         create_server = self.loop.create_server(server, self.addr, self.http_port)
         self.loop.run_until_complete(create_server)
-        output(self, "create http server at http://%s:%s" % (self.addr, self.http_port))
+        logger.info("create http server at http://%s:%s", self.addr, self.http_port)
         self.zmq_ctx = zmq.asyncio.Context()
         self.pub_sock = self.zmq_ctx.socket(zmq.PUB)
         self.pub_sock.bind('tcp://'+self.addr+':'+str(self.pub_port))
@@ -85,27 +80,27 @@ class Master(object):
         self.loop.close()
 
     async def _http_handler(self, request):
-        output(self, 'url : '+str(request.url))
+        logger.info('url:%s', str(request.url))
         text = await request.text()
-        output(self, 'request content : '+text)
+        logger.info('request content:%s', text)
         data = None
         try:
             data = json.loads(text)
         except json.JSONDecodeError:
-            output(self, 'text is not json format')
+            logger.info('text is not json format')
             return web.Response(text = json.dumps({'status':'fail', 'result':'request invalid'}))
         if 'event' not in data or 'parameters' not in data:
-            output(self, 'request invalid')
+            logger.info('request invalid')
             return web.Response(text = json.dumps({'status':'fail', 'result':'request invalid'}))
         elif data['event'] not in self.event_handlers:
-            output(self, 'event not defined')
+            logger.info('event not defined')
             return web.Response(text = json.dumps({'status':'fail', 'result':'event undefined'}))
         else:
-            output(self, 'call event handler')
+            logger.info('call event handler')
             event = Event(data['event'], data['parameters'], self)
-            output(self, 'process event:%s with id: %s' % (data['event'], str(event.event_id)))
+            logger.info('process event:%s with id:%s', data['event'], str(event.event_id))
             result = await self.event_handlers[data['event']](event, self)
-            output(self, 'result from handler: '+ str(result) )
+            logger.info('result from handler:%s', str(result))
             return web.Response(text = json.dumps(result))
     
     async def _heartbeat(self):
@@ -123,17 +118,17 @@ class Master(object):
                     self.workerinfo[node] = results[node]['result']
                 else:
                     self.workerinfo[node] = None
-            output(self, 'Worker Info:'+str(self.workerinfo))
+            logger.info('Worker info:%s', str(self.workerinfo))
 
     def add_pending(self, cmd_id, future):
         self.pending[cmd_id] = future
 
     async def _pull_in(self):
         while(True):
-            output(self, 'waiting on pull socket')
+            logger.info('waiting on pull socket')
             msg = await self.pull_sock.recv_multipart()
             msg = [ bytes.decode(x) for x in msg ]
-            output(self, 'msg from pull socket: ' + str(msg))
+            logger.info('msg from pull socket:%s', str(msg))
             result = json.loads(msg[0])
             cmd_id = result['actionid']
             future = self.pending[cmd_id]
@@ -171,7 +166,7 @@ class Event(object):
         for key in commands:
             self.commands[key] = commands[key]
     async def run(self):
-        output(self, 'run commands: ' + str(self.commands))
+        logger.info('run commands:%s', str(self.commands))
         """
             commands :
                 'a':('node-1', 'act-1', 'para-1', [])
@@ -195,7 +190,7 @@ class Event(object):
                 ready.append(key)
             for dep in deps:
                 graph[dep][0].append(key)
-        output(self, 'graph : '+str(graph))
+        logger.info('graph:%s', str(graph))
         """
             ready is tasks ready to run
             pendtasks is tasks running
@@ -204,18 +199,18 @@ class Event(object):
                 step 2: wait for some task finish and update ready queue
         """
         while(ready or pendtasks):
-            output(self, 'ready:'+str(ready))
-            output(self, 'pendtasks:'+str(pendtasks))
+            logger.info('ready:%s', str(ready))
+            logger.info('pendtasks:%s', str(pendtasks))
             for x in ready:
-                output(self, 'create task for:' + str(self.commands[x]))
+                logger.info('create task for:%s', str(self.commands[x]))
                 task = asyncio.ensure_future(self._run_command(self.commands[x][:3]))
                 tasknames[task] = x
                 pendtasks.append(task)
             ready.clear()
             if pendtasks:
-                output(self, 'wait for:'+str(pendtasks))
+                logger.info('wait for:%s', str(pendtasks))
                 done, pend = await asyncio.wait(pendtasks, return_when=asyncio.FIRST_COMPLETED)
-                output(self, 'tasks done:'+str(done))
+                logger.info('task done:%s', str(done))
                 for task in done:
                     pendtasks.remove(task)
                     name = tasknames[task]
@@ -224,7 +219,7 @@ class Event(object):
                         graph[succ][1] = graph[succ][1]-1
                         if graph[succ][1] == 0:
                             ready.append(succ)
-        output(self, 'result:'+str(results))
+        logger.info('result:%s', str(results))
         return results
 
     async def _run_command(self, command):
@@ -234,7 +229,7 @@ class Event(object):
         node, action, parameters = command
         self.cmd_id = self.cmd_id + 1
         actionid = str(self.event_id) + '-' + str(self.cmd_id)
-        output(self, 'run command: %s with id: %s' % (str(command), actionid))
+        logger.info('run command: %s with id: %s', str(command), str(actionid))
         msg = json.dumps({'action':action, 'parameters':parameters, 'actionid':actionid})
         # send (topic, msg)
         await self.master.pub_sock.send_multipart([str.encode(node), str.encode(msg)])
@@ -276,7 +271,7 @@ class Worker(object):
         self.push_sock.connect('tcp://'+self.master+':'+str(self.master_pull_port))
         asyncio.ensure_future(self._sub_in())
         asyncio.ensure_future(self._join())
-        output(self, 'event loop runs')
+        logger.info('event loop runs')
         try:
             self.loop.run_forever()
         except KeyboardInterrupt:
@@ -291,7 +286,7 @@ class Worker(object):
         self.loop.close()
 
     async def _join(self):
-        output(self, 'worker try to join master')
+        logger.info('worker try to join master')
         async with ClientSession() as session:
             url = 'http://'+self.master+':'+str(self.master_http_port)
             data = { 'event':'_NodeJoin', 'parameters':{'name':self.name} }
@@ -299,10 +294,10 @@ class Worker(object):
                 result = await response.text()
                 result = json.loads(result)
                 if result['status'] == 'fail':
-                    output(self, 'join master failed')
+                    logger.info('join master failed')
                     self.stop()
                 elif result['status'] == 'success':
-                    output(self, 'join master success')
+                    logger.info('join master success')
                     for key in self.pending_handlers:
                         self.action_handlers[key] = self.pending_handlers[key]
 
@@ -310,7 +305,7 @@ class Worker(object):
         while(True):
             msg = await self.sub_sock.recv_multipart()
             msg = [ bytes.decode(x) for x in msg ]
-            output(self, 'get message from sub: ' + str(msg))
+            logger.info('get message from sub:%s', str(msg))
             action = json.loads(msg[1])
             asyncio.ensure_future(self._run_action(action))
 

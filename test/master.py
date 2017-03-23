@@ -3,8 +3,8 @@
 import sys
 import random
 
-sys.path.append("..")
-from distgear.app import Master
+sys.path.append("../distgear")
+from app import Master
 
 master = Master()
 
