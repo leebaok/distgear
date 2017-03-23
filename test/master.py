@@ -23,8 +23,7 @@ async def testevent(event, master):
                 'e':(node, 'myaction', 'e', []), 
                 'f':(node, 'myaction', 'f', ['d','e']), 
             }
-    event.add_commands(commands)
-    results = await event.run()
+    results = await event.run(commands)
     return { 'result':results, 'status':'success' }
 
 master.start()
