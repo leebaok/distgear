@@ -41,8 +41,7 @@ class Master(object):
             return {'status':'fail', 'result':'get worker name failed'}
         name = paras['name']
         commands = { 'a':(name, '_test', 'none', [])  }
-        event.add_commands(commands)
-        results = await event.run()
+        results = await event.run(commands)
         result = results['a']
         if result['status'] == 'success':
             self.workers.append(name)
@@ -111,8 +110,7 @@ class Master(object):
             commands={}
             for node in nodes:
                 commands[node] = (node, '_heartbeat', 'Nothing', [])
-            event.add_commands(commands)
-            results = await event.run()
+            results = await event.run(commands)
             for node in nodes:
                 if results[node]['status'] == 'success':
                     self.workerinfo[node] = results[node]['result']
@@ -156,17 +154,14 @@ class Event(object):
         self.master = master
         self.event_id = master.loop.time()
         self.name = name
-        self.commands = {}
         self.cmd_id = 0
         self.paras = paras
-    def add_commands(self, commands):
+
+    async def run(self, commands):
         """
-            commands now is dict, see specs.md 
+            commands now is a dict
         """
-        for key in commands:
-            self.commands[key] = commands[key]
-    async def run(self):
-        logger.info('run commands:%s', str(self.commands))
+        logger.info('run commands:%s', str(commands))
         """
             commands :
                 'a':('node-1', 'act-1', 'para-1', [])
@@ -181,10 +176,10 @@ class Event(object):
         graph = {}
         ready = []
         tasknames, pendtasks, results = {}, [], {}
-        for key in self.commands:
+        for key in commands:
             graph[key] = [ [], 0 ]
-        for key in self.commands:
-            deps = self.commands[key][3]
+        for key in commands:
+            deps = commands[key][3]
             graph[key][1] = len(deps)
             if graph[key][1] == 0:
                 ready.append(key)
@@ -202,8 +197,8 @@ class Event(object):
             logger.info('ready:%s', str(ready))
             logger.info('pendtasks:%s', str(pendtasks))
             for x in ready:
-                logger.info('create task for:%s', str(self.commands[x]))
-                task = asyncio.ensure_future(self._run_command(self.commands[x][:3]))
+                logger.info('create task for:%s', str(commands[x]))
+                task = asyncio.ensure_future(self._run_command(commands[x][:3]))
                 tasknames[task] = x
                 pendtasks.append(task)
             ready.clear()
