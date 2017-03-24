@@ -37,3 +37,8 @@ commands = {
 			'f':('node-6', 'act-6', 'para-6', ['d', 'e']),
 		}
 ```
+
+## Name rules
+Event name and action name should be like variable names made up by numbers,
+letters and underscore. Names should not contain '@', it is reserved for 
+internal events and actions.
