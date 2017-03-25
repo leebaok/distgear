@@ -206,10 +206,67 @@ class Master(BaseMaster):
             logger.info('result from handler:%s', str(result))
             return web.Response(text = json.dumps(result))
 
+class Controller(BaseMaster):
+    def __init__(self, name, upper_pub_addr='0.0.0.0:8001', upper_pull_addr='0.0.0.0:8002', my_pub_addr='0.0.0.0:8003', my_pull_addr='0.0.0.0:8004'):
+        BaseMaster.__init__(self, pub_addr=my_pub_addr, pull_addr=my_pull_addr)
+        self.name = name
+        self.sub_sock = self.zmq_ctx.socket(zmq.SUB)
+        self.sub_sock.connect('tcp://'+upper_pub_addr)
+        self.sub_sock.setsockopt(zmq.SUBSCRIBE, str.encode(self.name))
+        self.push_sock = self.zmq_ctx.socket(zmq.PUSH)
+        self.push_sock.connect('tcp://'+upper_pull_addr)
+        self.event_handlers['@join'] = self._join
+        self.event_handlers['@heartbeat'] = self._reply_heartbeat
+        self.status = 'waiting'
+        asyncio.ensure_future(self._sub_in())
+        asyncio.ensure_future(self._try_join())
+
+    async def _join(self, event, master):
+        self.status = 'working'
+        return {'status':'success', 'result':'joins OK'}
+
+    async def _reply_heartbeat(self, event, master):
+        return {'status':'success', 'result':self.nodeinfo}
+
+    async def _try_join(self):
+        msg = {'event':'@NodeJoin', 'parameters':{'name':self.name}}
+        await self.push_sock.send_multipart([str.encode(json.dumps(msg))])
+        await asyncio.sleep(3)
+        if self.status is 'waiting':
+            logger.warning('join master/controller failed, please check master/controller and worker...')
+            self.stop()
+        else:
+            logger.info('join master/controller success')
+
+    async def _sub_in(self):
+        while(True):
+            msg = await self.sub_sock.recv_multipart()
+            msg = [ bytes.decode(x) for x in msg ]
+            logger.info('get message from sub:%s', str(msg))
+            eventinfo = json.loads(msg[1])
+            # raise Event Handler to handle the event and the handler 
+            asyncio.ensure_future(self._wrapper_handler(eventinfo))
+
+    async def _wrapper_handler(self, eventinfo):
+        """wrap the event handler because here we use action message to raise event ,
+        and we need to get the handler result and wrap it as a action return message
+        """
+        # TODO : here we use action message to raise event
+        # TODO : later we should use 'command' in message to raise event or action
+        event = Event(eventinfo['action'], eventinfo['parameters'], self, eventid=eventinfo['actionid'])
+        result = await self.event_handlers[eventinfo['action']](event, self)
+        # wrap the event result as action result message
+        eventinfo['status'] = result['status']
+        eventinfo['result'] = result['result']
+        await self.push_sock.send_multipart([ str.encode(json.dumps(eventinfo)) ])
+
 class Event(object):
-    def __init__(self, name, paras, master):
+    def __init__(self, name, paras, master, eventid = None):
         self.master = master
-        self.event_id = master.loop.time()
+        if eventid == None:
+            self.event_id = master.loop.time()
+        else:
+            self.event_id = eventid
         self.name = name
         self.cmd_id = 0
         self.paras = paras
@@ -290,7 +347,7 @@ class Event(object):
         
 
 class Worker(object):
-    def __init__(self, name, master_pub_addr='127.0.0.1:8001', master_pull_addr='127.0.0.1:8002'):
+    def __init__(self, name, master_pub_addr='127.0.0.1:8003', master_pull_addr='127.0.0.1:8004'):
         logger.info('init worker ...')
         # init base configurations
         self.name = name

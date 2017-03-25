@@ -15,15 +15,7 @@ async def testevent(event, master):
     if len(nodes)==0:
         return {'result':'no workers', 'status':'fail'}
     node = nodes[random.randint(0, len(nodes)-1)]
-    commands = {
-                'a':(node, 'myaction', 'a', []), 
-                'b':(node, 'myaction', 'b', []), 
-                'c':(node, 'myaction', 'c', ['a','b']), 
-                'd':(node, 'myaction', 'd', ['c']), 
-                'e':(node, 'myaction', 'e', []), 
-                'f':(node, 'myaction', 'f', ['d','e']), 
-            }
-    results = await event.run(commands)
-    return { 'result':results, 'status':'success' }
+    result = await event.run_command((node, 'subevent', 'Nothing'))
+    return { 'result':result, 'status':'success' }
 
 master.start()
