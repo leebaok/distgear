@@ -11,7 +11,7 @@ if len(sys.argv)==1:
     print('worker.py NAME')
     exit(1)
 name = sys.argv[1]
-worker = Worker(name, '127.0.0.1')
+worker = Worker(name, '127.0.0.1:8001', '127.0.0.1:8002')
 
 # define handlers for master
 @worker.doAction('myaction')

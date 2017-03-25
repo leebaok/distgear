@@ -2,14 +2,26 @@
 """
     app.py
     ~~~~~~~~~~~~~~~~~~~~~~~~~
-              Master                  Worker
-         +--------------+        +-------------+
-         |    Handler   |        |   Handler   |    ==> User Provide
-         +--------------+        +-------------+ 
-         |             PUB ---> SUB            |
-    --> HTTP   Loop     |        |    Loop     |    ==> DistGear Provide
-         |            PULL <--- PUSH           |
-         +--------------+        +-------------+
+
+             Master                Controller               Worker
+         +-----------+           +-----------+           +-----------+
+         |   Event   |           |   Event   |           |  Action   |
+         |  Handler  |           |  Handler  |           |  Handler  |
+         +-----------+           +-----------+           +-----------+
+         |          PUB ----+-> SUB         PUB ----+-> SUB          |
+   --> HTTP   Loop   |      |    |    Loop   |      |    |    Loop   |
+         |         PULL <-+-|-- PUSH       PULL <-+-|-- PUSH         |
+         +-----------+    | |    +-----------+    | |    +-----------+
+                          | |                     | |
+                          | |        Worker       | |       Worker
+                          | |    +-----------+    | |    +-----------+
+                          | |    |  Action   |    | |    |  Action   |
+                          | |    |  Handler  |    | |    |  Handler  |
+                          | |    +-----------+    | |    +-----------+
+                          | +-> SUB          |    | +-> SUB          |
+                          |      |    Loop   |    |      |    Loop   |
+                          +---- PUSH         |    +---- PUSH         |
+                                 +-----------+           +-----------+
 
     Author: Bao Li
 """ 
@@ -22,18 +34,36 @@ import sys,inspect
 import psutil
 from log import logger
 
-
-class Master(object):
-
-    def __init__(self):
-        self.addr = '0.0.0.0'
-        self.http_port = 8000
-        self.pub_port = 8001
-        self.pull_port = 8002
+class BaseMaster(object):
+    """Master and Controller are subclass of BaseMaster
+      +-----------+
+      |   Event   |
+      |  Handler  |
+      +-----------+
+     ??          PUB
+     ??    Loop   |
+     ??         PULL
+      +-----------+
+    """
+    def __init__(self, pub_addr='0.0.0.0:8001', pull_addr='0.0.0.0:8002'):
+        logger.info('BaseMaster init ...')
+        # init base configuration
+        self.pub_addr = pub_addr
+        self.pull_addr = pull_addr
         self.event_handlers = {'@NodeJoin':self._nodejoin}
-        self.workers = []
-        self.workerinfo = {}
-        self.pending = {}
+        self.nodes = []
+        self.nodeinfo = {}
+        self.futures = {}
+        # init loop, sockets and tasks
+        self.loop = zmq.asyncio.ZMQEventLoop()
+        asyncio.set_event_loop(self.loop)
+        self.zmq_ctx = zmq.asyncio.Context()
+        self.pub_sock = self.zmq_ctx.socket(zmq.PUB)
+        self.pub_sock.bind('tcp://'+self.pub_addr)
+        self.pull_sock = self.zmq_ctx.socket(zmq.PULL)
+        self.pull_sock.bind('tcp://'+self.pull_addr)
+        asyncio.ensure_future(self._pull_in())
+        asyncio.ensure_future(self._heartbeat())
 
     async def _nodejoin(self, event, master):
         """new node joins, this event should be raised from pull socket.
@@ -49,7 +79,7 @@ class Master(object):
         command = (name, '@join', 'none')
         result = await event.run_command(command)
         if result['status'] == 'success':
-            self.workers.append(name)
+            self.nodes.append(name)
             logger.info('new node joins:%s', name)
             # return is not necessary, because this event is raised by pull socket
             # and it don't need a result
@@ -58,20 +88,7 @@ class Master(object):
             return {'status':'fail', 'result':'work reply failed'}
 
     def start(self):
-        logger.info('master start ...')
-        self.loop = zmq.asyncio.ZMQEventLoop()
-        asyncio.set_event_loop(self.loop)
-        server = web.Server(self._http_handler)
-        create_server = self.loop.create_server(server, self.addr, self.http_port)
-        self.loop.run_until_complete(create_server)
-        logger.info("create http server at http://%s:%s", self.addr, self.http_port)
-        self.zmq_ctx = zmq.asyncio.Context()
-        self.pub_sock = self.zmq_ctx.socket(zmq.PUB)
-        self.pub_sock.bind('tcp://'+self.addr+':'+str(self.pub_port))
-        self.pull_sock = self.zmq_ctx.socket(zmq.PULL)
-        self.pull_sock.bind('tcp://'+self.addr+':'+str(self.pull_port))
-        asyncio.ensure_future(self._pull_in())
-        asyncio.ensure_future(self._heartbeat())
+        logger.info('basemaster start ...')
         try:
             self.loop.run_forever()
         except KeyboardInterrupt:
@@ -79,11 +96,85 @@ class Master(object):
         self.stop()
 
     def stop(self):
+        logger.info('basemaster stop ...')
         tasks = asyncio.Task.all_tasks(self.loop)
         for task in tasks:
             task.cancel()
         self.loop.run_until_complete(asyncio.wait(list(tasks)))
         self.loop.close()
+   
+    async def _heartbeat(self):
+        """heartbeat event, send heartbeat message and collect nodes information
+        """
+        while(True):
+            await asyncio.sleep(5)
+            nodes = [ node for node in self.nodes ]
+            event = Event('@HeartBeat', 'Nothing', self)
+            commands={}
+            for node in nodes:
+                commands[node] = (node, '@heartbeat', 'Nothing', [])
+            results = await event.run(commands)
+            for node in nodes:
+                if results[node]['status'] == 'success':
+                    self.nodeinfo[node] = results[node]['result']
+                else:
+                    logger.warning('get node:%s heartbeat and info failed', node)
+                    self.nodeinfo[node] = None
+            logger.info('Worker info:%s', str(self.nodeinfo))
+
+    def add_future(self, cmd_id, future):
+        """add future to self.futures and pull socket will get the result and 
+        set the future
+        """
+        self.futures[cmd_id] = future
+
+    async def _pull_in(self):
+        """pull socket receive two types of messages: command result, event request
+        """
+        while(True):
+            logger.info('waiting on pull socket')
+            msg = await self.pull_sock.recv_multipart()
+            msg = [ bytes.decode(x) for x in msg ]
+            logger.info('message from pull socket:%s', str(msg))
+            content = json.loads(msg[0])
+            if 'event' in content:
+                event = Event(content['event'], content['parameters'], self)
+                asyncio.ensure_future(self.event_handlers[content['event']](event, self))
+            else:
+                result = content
+                cmd_id = result['actionid']
+                future = self.futures[cmd_id]
+                del self.futures[cmd_id]
+                future.set_result({'status':result['status'], 'result':result['result']})
+     
+    def handleEvent(self, event):
+        """register handler of event
+        Usage: 
+            app = Master()
+            @app.handleEvent('Event')
+            def handler():
+                pass
+
+            app.handleEvent(...) will return decorator
+            @decorator will decorate func
+            this is the normal method to decorate func when decorator has args
+        """
+        def decorator(func):
+            self.event_handlers[event] = func
+            return func
+        return decorator
+
+class Master(BaseMaster):
+    def __init__(self, http_addr='0.0.0.0:8000', pub_addr='0.0.0.0:8001', pull_addr='0.0.0.0:8002'):
+        """Master add a http server based on BaseMaster
+        """
+        BaseMaster.__init__(self, pub_addr=pub_addr, pull_addr=pull_addr)
+        self.http_addr = http_addr
+        addr,port = http_addr.split(':')
+        server = web.Server(self._http_handler)
+        create_server = self.loop.create_server(server, addr, int(port))
+        self.loop.run_until_complete(create_server)
+        logger.info('create http server at http://%s', self.http_addr)
 
     async def _http_handler(self, request):
         """handle http request. http request is to raise event and then 
@@ -114,67 +205,6 @@ class Master(object):
             result = await self.event_handlers[data['event']](event, self)
             logger.info('result from handler:%s', str(result))
             return web.Response(text = json.dumps(result))
-    
-    async def _heartbeat(self):
-        """heartbeat event, send heartbeat message and collect worker information
-        """
-        while(True):
-            await asyncio.sleep(5)
-            nodes = [ node for node in self.workers ]
-            event = Event('_HeartBeat', 'Nothing', self)
-            commands={}
-            for node in nodes:
-                commands[node] = (node, '@heartbeat', 'Nothing', [])
-            results = await event.run(commands)
-            for node in nodes:
-                if results[node]['status'] == 'success':
-                    self.workerinfo[node] = results[node]['result']
-                else:
-                    logger.warning('get node:%s heartbeat and info failed', node)
-                    self.workerinfo[node] = None
-            logger.info('Worker info:%s', str(self.workerinfo))
-
-    def add_pending(self, cmd_id, future):
-        """add future to self.pending and pull socket will get the result and 
-        set the future
-        """
-        self.pending[cmd_id] = future
-
-    async def _pull_in(self):
-        """pull socket receive two types of messages: command result, event request
-        """
-        while(True):
-            logger.info('waiting on pull socket')
-            msg = await self.pull_sock.recv_multipart()
-            msg = [ bytes.decode(x) for x in msg ]
-            logger.info('msg from pull socket:%s', str(msg))
-            content = json.loads(msg[0])
-            if 'event' in content:
-                event = Event(content['event'], content['parameters'], self)
-                asyncio.ensure_future(self.event_handlers[content['event']](event, self))
-            else:
-                result = content
-                cmd_id = result['actionid']
-                future = self.pending[cmd_id]
-                del self.pending[cmd_id]
-                future.set_result({'status':result['status'], 'result':result['result']})
-     
-    def handleEvent(self, event):
-        """register handler of event
-        Usage: 
-            app = Master()
-            @app.handleEvent('Event')
-            def handler():
-                pass
-
-            app.handleEvent(...) will return decorator
-            @decorator will decorate func
-            this is the normal method to decorate func when decorator has args
-        """
-        def decorator(func):
-            self.event_handlers[event] = func
-            return func
-        return decorator
 
 class Event(object):
     def __init__(self, name, paras, master):
@@ -254,36 +284,37 @@ class Event(object):
         # send (topic, msg)
         await self.master.pub_sock.send_multipart([str.encode(node), str.encode(msg)])
         future = asyncio.Future()
-        self.master.add_pending(actionid, future)
+        self.master.add_future(actionid, future)
         await future
         return future.result()
         
 
 class Worker(object):
-    def __init__(self, name, master_addr):
-        self.master = master_addr
-        self.master_http_port = 8000
-        self.master_pub_port = 8001
-        self.master_pull_port = 8002
+    def __init__(self, name, master_pub_addr='127.0.0.1:8001', master_pull_addr='127.0.0.1:8002'):
+        logger.info('init worker ...')
+        # init base configurations
         self.name = name
+        self.master_pub_addr = master_pub_addr
+        self.master_pull_addr = master_pull_addr
         self.action_handlers = {'@join':self._join}
-        self.pending_handlers = {'@heartbeat':self._heartbeat}
-
-    def start(self):
+        # init loop, sockets and tasks
         self.loop = zmq.asyncio.ZMQEventLoop()
         asyncio.set_event_loop(self.loop)
         self.zmq_ctx = zmq.asyncio.Context()
         self.sub_sock = self.zmq_ctx.socket(zmq.SUB)
-        self.sub_sock.connect('tcp://'+self.master+':'+str(self.master_pub_port))
+        self.sub_sock.connect('tcp://'+self.master_pub_addr)
         # set SUB topic is necessary (otherwise, no message will be received)
         self.sub_sock.setsockopt(zmq.SUBSCRIBE, str.encode(self.name))
         # 'all' event maybe not supported. because the result is not easy to collect
         #self.sub_sock.setsockopt(zmq.SUBSCRIBE, str.encode('all'))
         self.push_sock = self.zmq_ctx.socket(zmq.PUSH)
-        self.push_sock.connect('tcp://'+self.master+':'+str(self.master_pull_port))
+        self.push_sock.connect('tcp://'+self.master_pull_addr)
         asyncio.ensure_future(self._sub_in())
         asyncio.ensure_future(self._try_join())
-        logger.info('event loop runs')
+        self.pending_handlers = {'@heartbeat':self._heartbeat}
+
+    def start(self):
+        logger.info('worker start ...')
         try:
             self.loop.run_forever()
         except KeyboardInterrupt:

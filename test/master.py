@@ -11,7 +11,7 @@ master = Master()
 # define handlers for master
 @master.handleEvent('myevent')
 async def testevent(event, master):
-    nodes = list(master.workerinfo.keys())
+    nodes = list(master.nodeinfo.keys())
     if len(nodes)==0:
         return {'result':'no workers', 'status':'fail'}
     node = nodes[random.randint(0, len(nodes)-1)]
