@@ -35,22 +35,6 @@ class Master(object):
         self.workerinfo = {}
         self.pending = {}
 
-    async def _nodejoin_deprecated(self, event, master):
-        """new node joins master and master will try to run commands to the node
-        to test the node's sub and push sockets"""
-        paras = event.paras
-        if 'name' not in paras:
-            return {'status':'fail', 'result':'get worker name failed'}
-        name = paras['name']
-        command = (name, '@test', 'none')
-        result = await event.run_command(command)
-        if result['status'] == 'success':
-            self.workers.append(name)
-            logger.info('new node join: %s', name)
-            return {'status':'success', 'result':'work join success'}
-        else:
-            return {'status':'fail', 'result':'work reply failed'}
-
     async def _nodejoin(self, event, master):
         """new node joins, this event should be raised from pull socket.
         here, we will send '@join' command to the new node and wait for its reply
@@ -102,6 +86,9 @@ class Master(object):
         self.loop.close()
 
     async def _http_handler(self, request):
+        """handle http request. http request is to raise event and then 
+        we handle the event 
+        """
         logger.info('url:%s', str(request.url))
         text = await request.text()
         logger.info('request content:%s', text)
@@ -129,6 +116,8 @@ class Master(object):
             return web.Response(text = json.dumps(result))
     
     async def _heartbeat(self):
+        """heartbeat event, send heartbeat message and collect worker information
+        """
         while(True):
             await asyncio.sleep(5)
             nodes = [ node for node in self.workers ]
@@ -146,9 +135,14 @@ class Master(object):
             logger.info('Worker info:%s', str(self.workerinfo))
 
     def add_pending(self, cmd_id, future):
+        """add future to self.pending and pull socket will get the result and 
+        set the future
+        """
         self.pending[cmd_id] = future
 
     async def _pull_in(self):
+        """pull socket receive two types of messages: command result, event request
+        """
         while(True):
             logger.info('waiting on pull socket')
             msg = await self.pull_sock.recv_multipart()
@@ -166,7 +160,8 @@ class Master(object):
                 future.set_result({'status':result['status'], 'result':result['result']})
      
     def handleEvent(self, event):
-        """
+        """register handler of event
+        Usage: 
             app = Master()
             @app.handleEvent('Event')
             def handler():
@@ -190,8 +185,7 @@ class Event(object):
         self.paras = paras
 
     async def run(self, commands):
-        """
-            commands now is a dict
+        """run multi commands, commands is a dict
         """
         logger.info('run commands:%s', str(commands))
         """
@@ -250,8 +244,7 @@ class Event(object):
         return results
 
     async def run_command(self, command):
-        """
-            command : (node, action, parameters)
+        """run one command, command : (node, action, parameters)
         """
         node, action, parameters = command
         self.cmd_id = self.cmd_id + 1
@@ -304,24 +297,13 @@ class Worker(object):
         self.loop.run_until_complete(asyncio.wait(list(tasks)))
         self.loop.close()
 
-    async def _join_deprecated(self):
-        """Join master"""
-        logger.info('worker try to join master')
-        async with ClientSession() as session:
-            url = 'http://'+self.master+':'+str(self.master_http_port)
-            data = { 'event':'@NodeJoin', 'parameters':{'name':self.name} }
-            async with session.post(url, data=json.dumps(data)) as response:
-                result = await response.text()
-                result = json.loads(result)
-                if result['status'] == 'fail':
-                    logger.info('join master failed')
-                    self.stop()
-                elif result['status'] == 'success':
-                    logger.info('join master success')
-                    for key in self.pending_handlers:
-                        self.action_handlers[key] = self.pending_handlers[key]
-
     async def _try_join(self):
+        """try to join master/controller.
+        1. push to master/controller pull socket to raise @NodeJoin event
+        2. master/controller send '@join' command to this node to test pub-sub channel and push-pull channel
+        3. this node do @join action for some preparation
+        4. _try_join wait for some time and then test if this node joins 
+        """
         msg = {'event':'@NodeJoin', 'parameters':{'name':self.name}}
         await self.push_sock.send_multipart([str.encode(json.dumps(msg))])
         await asyncio.sleep(3)
@@ -338,12 +320,15 @@ class Worker(object):
         return {'status':'success', 'result':'joins OK'}
 
     async def _heartbeat(self, paras):
+        """heartbeat action, return system info
+        """
         memload = psutil.virtual_memory().percent
         cpuload = psutil.cpu_percent()
         return { 'status':'success', 'result': {'mem':memload, 'cpu':cpuload} }
 
-
     async def _sub_in(self):
+        """receive commands from sub socket
+        """
         while(True):
             # recv (topic, msg)
             msg = await self.sub_sock.recv_multipart()
@@ -363,9 +348,10 @@ class Worker(object):
         await self.push_sock.send_multipart([ str.encode(json.dumps(action)) ])
 
     def doAction(self, action):
+        """register handler of action. this is a wrapper of decorator
+        """
         def decorator(func):
             self.pending_handlers[action] = func
             return func
         return decorator
-
 
