@@ -42,9 +42,8 @@ class Master(object):
         if 'name' not in paras:
             return {'status':'fail', 'result':'get worker name failed'}
         name = paras['name']
-        commands = { 'a':(name, '@test', 'none', [])  }
-        results = await event.run(commands)
-        result = results['a']
+        command = (name, '@test', 'none')
+        result = await event.run_command(command)
         if result['status'] == 'success':
             self.workers.append(name)
             logger.info('new node join: %s', name)
@@ -63,9 +62,8 @@ class Master(object):
             # and it don't need a result
             return {'status':'fail', 'result':'no node name'}
         name = paras['name']
-        commands = {'a':(name, '@join', 'none', [])}
-        results = await event.run(commands)
-        result = results['a']
+        command = (name, '@join', 'none')
+        result = await event.run_command(command)
         if result['status'] == 'success':
             self.workers.append(name)
             logger.info('new node joins:%s', name)
@@ -143,6 +141,7 @@ class Master(object):
                 if results[node]['status'] == 'success':
                     self.workerinfo[node] = results[node]['result']
                 else:
+                    logger.warning('get node:%s heartbeat and info failed', node)
                     self.workerinfo[node] = None
             logger.info('Worker info:%s', str(self.workerinfo))
 
@@ -231,7 +230,7 @@ class Event(object):
             logger.info('pendtasks:%s', str(pendtasks))
             for x in ready:
                 logger.info('create task for:%s', str(commands[x]))
-                task = asyncio.ensure_future(self._run_command(commands[x][:3]))
+                task = asyncio.ensure_future(self.run_command(commands[x][:3]))
                 tasknames[task] = x
                 pendtasks.append(task)
             ready.clear()
@@ -250,7 +249,7 @@ class Event(object):
         logger.info('result:%s', str(results))
         return results
 
-    async def _run_command(self, command):
+    async def run_command(self, command):
         """
             command : (node, action, parameters)
         """
