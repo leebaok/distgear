@@ -17,7 +17,9 @@ worker = Worker(name)
 @worker.doAction('myaction')
 async def testaction(paras):
     print('<Worker.myaction> : '+str(paras))
-    await asyncio.sleep(random.randint(0,3))
+    await asyncio.sleep(random.randint(0,1))
+    if paras=='c':
+        return {'status':'fail', 'result':'test fail'}
     return {'status':'success', 'result':'action done'}
 
 worker.start()

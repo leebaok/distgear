@@ -108,7 +108,7 @@ class BaseMaster(object):
         """heartbeat event, send 'nodeinfo' message to collect nodes information
         """
         while(True):
-            await asyncio.sleep(5)
+            await asyncio.sleep(20)
             nodes = [ node for node in self.nodes ]
             event = Event('@HeartBeat', 'Nothing', self)
             commands={}
@@ -280,7 +280,7 @@ class Event(object):
         self.cmd_cnt = 0
         self.paras = paras
 
-    async def run(self, commands):
+    async def run_without_rollback(self, commands):
         """run multi commands, commands is a dict
         """
         logger.info('run commands:%s', str(commands))
@@ -338,6 +338,85 @@ class Event(object):
                             ready.append(succ)
         logger.info('result:%s', str(results))
         return results
+
+    async def run(self, commands, rollback=False):
+        """run multi commands, commands is a dict
+        """
+        logger.info('run commands:%s', str(commands))
+        """
+            commands :
+                'a':('node-1', 'act-1', 'para-1', [])
+                'b':('node-2', 'act-2', 'para-2', [])
+                'c':('node-3', 'act-3', 'para-3', ['a', 'b'])
+            build graph from commands:
+                command name       succeed       deps count
+                 'a'               ['c']            0
+                 'b'               ['c']            0
+                 'c'               []               2
+        """
+        graph = {}
+        ready = []
+        tasknames, pendtasks, results = {}, [], {}
+        for key in commands:
+            graph[key] = [ [], 0 ]
+        for key in commands:
+            deps = commands[key][3]
+            graph[key][1] = len(deps)
+            if graph[key][1] == 0:
+                ready.append(key)
+            for dep in deps:
+                graph[dep][0].append(key)
+        logger.info('graph:%s', str(graph))
+        """
+            ready is tasks ready to run
+            pendtasks is tasks running
+            so, 
+                step 1: run the ready tasks
+                step 2: wait for some task finish and update ready queue
+            if some task runs failed:
+                if rollback is False, the tasks depending on it will not run
+                if rollback is True, all done tasks will be undid
+            by the way, if some task failed, it means the event/action on the
+            remote node is failed. And the remote event/action should clear the 
+            things it has done
+        """
+        stop = False
+        while(ready or pendtasks):
+            logger.info('ready:%s', str(ready))
+            logger.info('pendtasks:%s', str(pendtasks))
+            for x in ready:
+                logger.info('create task for:%s', str(commands[x]))
+                task = asyncio.ensure_future(self.run_command(commands[x][:3]))
+                tasknames[task] = x
+                pendtasks.append(task)
+            ready.clear()
+            if pendtasks:
+                logger.info('wait for:%s', str(pendtasks))
+                done, pend = await asyncio.wait(pendtasks, return_when=asyncio.FIRST_COMPLETED)
+                logger.info('task done:%s', str(done))
+                for task in done:
+                    pendtasks.remove(task)
+                    name = tasknames[task]
+                    results[name] = task.result()
+                    result = task.result()
+                    if stop or ('status' not in result) or (result['status'] == 'fail'):
+                        if rollback:
+                            stop = True
+                        continue
+                    for succ in graph[name][0]:
+                        graph[succ][1] = graph[succ][1]-1
+                        if graph[succ][1] == 0:
+                            ready.append(succ)
+        for key in graph:
+            if graph[key][1]!=0:
+                results[key] = {'status':'wait', 'result':'dependent commands run failed or not run or some command failed with rollback mode'}
+        # stop==True means rollback and some command runs failed
+        if stop:
+            pass
+
+        logger.info('result:%s', str(results))
+        return results
+
 
     async def run_command(self, command):
         """run one command, command : (node, action, parameters)
