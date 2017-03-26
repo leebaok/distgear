@@ -40,9 +40,9 @@ class BaseMaster(object):
       |   Event   |
       |  Handler  |
       +-----------+
-     ??          PUB
+     ??          PUB ------- commands ------>
      ??    Loop   |
-     ??         PULL
+     ??         PULL <--- events,results ----
       +-----------+
     """
     def __init__(self, pub_addr='0.0.0.0:8001', pull_addr='0.0.0.0:8002'):
@@ -67,7 +67,8 @@ class BaseMaster(object):
 
     async def _nodejoin(self, event, master):
         """new node joins, this event should be raised from pull socket.
-        here, we will send '@join' command to the new node and wait for its reply
+        here, we will send '@join' command to the new node to test pub-sub channel
+        and then wait for its reply
         """
         paras = event.paras
         if 'name' not in paras:
@@ -104,7 +105,7 @@ class BaseMaster(object):
         self.loop.close()
    
     async def _heartbeat(self):
-        """heartbeat event, send heartbeat message and collect nodes information
+        """heartbeat event, send 'nodeinfo' message to collect nodes information
         """
         while(True):
             await asyncio.sleep(5)
@@ -112,7 +113,7 @@ class BaseMaster(object):
             event = Event('@HeartBeat', 'Nothing', self)
             commands={}
             for node in nodes:
-                commands[node] = (node, '@heartbeat', 'Nothing', [])
+                commands[node] = (node, '@nodeinfo', 'Nothing', [])
             results = await event.run(commands)
             for node in nodes:
                 if results[node]['status'] == 'success':
@@ -142,7 +143,7 @@ class BaseMaster(object):
                 asyncio.ensure_future(self.event_handlers[content['event']](event, self))
             else:
                 result = content
-                cmd_id = result['actionid']
+                cmd_id = result['id']
                 future = self.futures[cmd_id]
                 del self.futures[cmd_id]
                 future.set_result({'status':result['status'], 'result':result['result']})
@@ -198,7 +199,7 @@ class Master(BaseMaster):
         else:
             logger.info('call event handler')
             event = Event(data['event'], data['parameters'], self)
-            logger.info('process event:%s with id:%s', data['event'], str(event.event_id))
+            logger.info('process event:%s with id:%s', data['event'], str(event.id))
             # web.Server will create new task of _http_handler to handle http request 
             # so, 'await self.event_handlers[...](...)' is OK
             # we don't need to create new task to run event handler
@@ -216,7 +217,7 @@ class Controller(BaseMaster):
         self.push_sock = self.zmq_ctx.socket(zmq.PUSH)
         self.push_sock.connect('tcp://'+upper_pull_addr)
         self.event_handlers['@join'] = self._join
-        self.event_handlers['@heartbeat'] = self._reply_heartbeat
+        self.event_handlers['@nodeinfo'] = self._nodeinfo
         self.status = 'waiting'
         asyncio.ensure_future(self._sub_in())
         asyncio.ensure_future(self._try_join())
@@ -225,7 +226,7 @@ class Controller(BaseMaster):
         self.status = 'working'
         return {'status':'success', 'result':'joins OK'}
 
-    async def _reply_heartbeat(self, event, master):
+    async def _nodeinfo(self, event, master):
         return {'status':'success', 'result':self.nodeinfo}
 
     async def _try_join(self):
@@ -243,32 +244,40 @@ class Controller(BaseMaster):
             msg = await self.sub_sock.recv_multipart()
             msg = [ bytes.decode(x) for x in msg ]
             logger.info('get message from sub:%s', str(msg))
-            eventinfo = json.loads(msg[1])
+            command = json.loads(msg[1])
             # raise Event Handler to handle the event and the handler 
-            asyncio.ensure_future(self._wrapper_handler(eventinfo))
+            # wrap event handler to wrap the result in the valid format
+            asyncio.ensure_future(self._wrapper_handler(command))
 
-    async def _wrapper_handler(self, eventinfo):
-        """wrap the event handler because here we use action message to raise event ,
-        and we need to get the handler result and wrap it as a action return message
+    async def _wrapper_handler(self, command):
+        """wrap the event handler because we need to get the handler result and wrap it 
+        in the valid format
         """
-        # TODO : here we use action message to raise event
-        # TODO : later we should use 'command' in message to raise event or action
-        event = Event(eventinfo['action'], eventinfo['parameters'], self, eventid=eventinfo['actionid'])
-        result = await self.event_handlers[eventinfo['action']](event, self)
-        # wrap the event result as action result message
-        eventinfo['status'] = result['status']
-        eventinfo['result'] = result['result']
-        await self.push_sock.send_multipart([ str.encode(json.dumps(eventinfo)) ])
+        if ('command' or 'parameters' or 'id') not in command:
+            command['result'] = 'invalid command'
+            command['status'] = 'fail'
+        elif command['command'] not in self.event_handlers:
+            command['result'] = 'event not defined'
+            command['status'] = 'fail'
+        else:
+            event = Event(command['command'], command['parameters'], self, eventid=command['id'])
+            result = await self.event_handlers[command['command']](event, self)
+            command['result'] = result['result']
+            command['status'] = result['status']
+        await self.push_sock.send_multipart([ str.encode(json.dumps(command)) ])
+
 
 class Event(object):
+    count = 0
     def __init__(self, name, paras, master, eventid = None):
+        Event.count = Event.count+1
         self.master = master
-        if eventid == None:
-            self.event_id = master.loop.time()
+        if not eventid:
+            self.id = Event.count
         else:
-            self.event_id = eventid
+            self.id = eventid
         self.name = name
-        self.cmd_id = 0
+        self.cmd_cnt = 0
         self.paras = paras
 
     async def run(self, commands):
@@ -334,14 +343,14 @@ class Event(object):
         """run one command, command : (node, action, parameters)
         """
         node, action, parameters = command
-        self.cmd_id = self.cmd_id + 1
-        actionid = str(self.event_id) + '-' + str(self.cmd_id)
-        logger.info('run command: %s with id: %s', str(command), str(actionid))
-        msg = json.dumps({'action':action, 'parameters':parameters, 'actionid':actionid})
+        self.cmd_cnt = self.cmd_cnt + 1
+        cmd_id = str(self.id) + '-' + str(self.cmd_cnt)
+        logger.info('run command: %s with id: %s', str(command), str(cmd_id))
+        msg = json.dumps({'command':action, 'parameters':parameters, 'id':cmd_id})
         # send (topic, msg)
         await self.master.pub_sock.send_multipart([str.encode(node), str.encode(msg)])
         future = asyncio.Future()
-        self.master.add_future(actionid, future)
+        self.master.add_future(cmd_id, future)
         await future
         return future.result()
         
@@ -368,7 +377,7 @@ class Worker(object):
         self.push_sock.connect('tcp://'+self.master_pull_addr)
         asyncio.ensure_future(self._sub_in())
         asyncio.ensure_future(self._try_join())
-        self.pending_handlers = {'@heartbeat':self._heartbeat}
+        self.pending_handlers = {'@nodeinfo':self._nodeinfo}
 
     def start(self):
         logger.info('worker start ...')
@@ -395,7 +404,7 @@ class Worker(object):
         msg = {'event':'@NodeJoin', 'parameters':{'name':self.name}}
         await self.push_sock.send_multipart([str.encode(json.dumps(msg))])
         await asyncio.sleep(3)
-        if '@heartbeat' not in self.action_handlers:
+        if '@nodeinfo' not in self.action_handlers:
             logger.warning('join master/controller failed, please check master/controller and worker...')
             self.stop()
         else:
@@ -407,8 +416,8 @@ class Worker(object):
         self.pending_handlers.clear()            
         return {'status':'success', 'result':'joins OK'}
 
-    async def _heartbeat(self, paras):
-        """heartbeat action, return system info
+    async def _nodeinfo(self, paras):
+        """nodeinfo action, return system info
         """
         memload = psutil.virtual_memory().percent
         cpuload = psutil.cpu_percent()
@@ -422,18 +431,21 @@ class Worker(object):
             msg = await self.sub_sock.recv_multipart()
             msg = [ bytes.decode(x) for x in msg ]
             logger.info('get message from sub:%s', str(msg))
-            action = json.loads(msg[1])
-            asyncio.ensure_future(self._run_action(action))
+            command = json.loads(msg[1])
+            asyncio.ensure_future(self._run_action(command))
 
-    async def _run_action(self, action):
-        if action['action'] not in self.action_handlers:
-            action['result'] = 'action not defined'
-            action['status'] = 'fail'
+    async def _run_action(self, command):
+        if ('command' or 'parameters' or 'id') not in command:
+            command['result'] = 'invalid command'
+            command['status'] = 'fail'
+        elif command['command'] not in self.action_handlers:
+            command['result'] = 'action not defined'
+            command['status'] = 'fail'
         else:
-            result = await self.action_handlers[action['action']](action['parameters'])
-            action['result'] = result['result']
-            action['status'] = result['status']
-        await self.push_sock.send_multipart([ str.encode(json.dumps(action)) ])
+            result = await self.action_handlers[command['command']](command['parameters'])
+            command['result'] = result['result']
+            command['status'] = result['status']
+        await self.push_sock.send_multipart([ str.encode(json.dumps(command)) ])
 
     def doAction(self, action):
         """register handler of action. this is a wrapper of decorator
