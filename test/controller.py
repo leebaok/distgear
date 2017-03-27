@@ -23,7 +23,7 @@ async def testevent(event, master):
                 'e':(node, 'myaction', 'e', []), 
                 'f':(node, 'myaction', 'f', ['d','e']), 
             }
-    results = await event.run(commands)
+    results = await event.run(commands, rollback=True)
     return { 'result':results, 'status':'success' }
 
 control.start()

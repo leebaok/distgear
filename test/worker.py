@@ -22,4 +22,11 @@ async def testaction(paras):
         return {'status':'fail', 'result':'test fail'}
     return {'status':'success', 'result':'action done'}
 
+@worker.undoAction('myaction')
+async def testundoaction(paras):
+    print('<Worker.undomyaction> : '+str(paras))
+    await asyncio.sleep(random.randint(0,1))
+    return {'status':'success', 'result':'undo action of '+str(paras)}
+
+
 worker.start()

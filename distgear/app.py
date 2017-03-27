@@ -341,6 +341,8 @@ class Event(object):
 
     async def run(self, commands, rollback=False):
         """run multi commands, commands is a dict
+        Now, we only support worker to undo actions
+        so, rollback only could be used when the event is to send commands to workers
         """
         logger.info('run commands:%s', str(commands))
         """
@@ -353,17 +355,14 @@ class Event(object):
                  'a'               ['c']            0
                  'b'               ['c']            0
                  'c'               []               2
+            based on the graph and topological sorting, we can run commands correctly
         """
         graph = {}
-        ready = []
-        tasknames, pendtasks, results = {}, [], {}
         for key in commands:
             graph[key] = [ [], 0 ]
         for key in commands:
             deps = commands[key][3]
             graph[key][1] = len(deps)
-            if graph[key][1] == 0:
-                ready.append(key)
             for dep in deps:
                 graph[dep][0].append(key)
         logger.info('graph:%s', str(graph))
@@ -380,6 +379,10 @@ class Event(object):
             remote node is failed. And the remote event/action should clear the 
             things it has done
         """
+        tasknames, ready, pendtasks, results = {}, [], [], {}
+        for key in commands:
+            if graph[key][1] == 0:
+                ready.append(key)
         stop = False
         while(ready or pendtasks):
             logger.info('ready:%s', str(ready))
@@ -410,17 +413,85 @@ class Event(object):
         for key in graph:
             if graph[key][1]!=0:
                 results[key] = {'status':'wait', 'result':'dependent commands run failed or not run or some command failed with rollback mode'}
+        """command result and its rollback action:
+            STATUS          RESULT            ROLLBACK
+            -------         -------           ---------
+            success         result            undo
+            wait            not run           --
+            *timeout         timeout           ?? (for timeout, when rollback, undo it or nothing)
+            undo            undo              --
+            fail            fail              --
+
+        * means we donot support now
+        """
+        """for rollback: rollback the successful commands:
+            commands :
+                'a':('node-1', 'act-1', 'para-1', [])
+                'b':('node-2', 'act-2', 'para-2', [])
+                'c':('node-3', 'act-3', 'para-3', ['a', 'b'])
+                'd':('node-4', 'act-4', 'para-4', ['c'])
+            when 'a','b','c' run successfully and 'd' runs failed
+            build back graph of 'a','b','c':
+                command name       preceding      succeeding count
+                 'a'               []               1 
+                 'b'               []               1
+                 'c'               ['a','b']        0
+            based on the back graph and topological sorting, we can rollback commands in correct sequence
+        """
+        if not stop:
+            logger.info('result:%s', str(results))
+            return results
         # stop==True means rollback and some command runs failed
-        if stop:
-            pass
+        # now, do rollback work
+        logger.info('RollBack begin ...')
+        undocmds = []
+        for key in results:
+            if results[key]['status']=='success':
+                undocmds.append(key)
+        backgraph = {}
+        for key in undocmds:
+            backgraph[key] = [ [], 0 ]
+        for key in undocmds:
+            deps = commands[key][3]
+            for dep in deps:
+                backgraph[key][0].append(dep)
+                backgraph[dep][1] = backgraph[dep][1]+1
+        tasknames, ready, pendtasks = {}, [], []
+        for key in undocmds:
+            if backgraph[key][1] == 0:
+                ready.append(key)
+        while(ready or pendtasks):
+            logger.info('ready:%s', str(ready))
+            logger.info('pendtasks:%s', str(pendtasks))
+            for x in ready:
+                node, cmd, paras, _ = commands[x]
+                command = (node, 'undo@'+cmd, paras)
+                logger.info('create task for:%s', str(command))
+                task = asyncio.ensure_future(self.run_command(command))
+                tasknames[task] = x
+                pendtasks.append(task)
+            ready.clear()
+            if pendtasks:
+                logger.info('wait for:%s', str(pendtasks))
+                done, pend = await asyncio.wait(pendtasks, return_when=asyncio.FIRST_COMPLETED)
+                logger.info('task done:%s', str(done))
+                for task in done:
+                    pendtasks.remove(task)
+                    name = tasknames[task]
+                    results[name] = {'status':'undo', 'result':task.result()}
+                    for prec in backgraph[name][0]:
+                        backgraph[prec][1] = backgraph[prec][1]-1
+                        if backgraph[prec][1] == 0:
+                            ready.append(prec)
 
         logger.info('result:%s', str(results))
         return results
 
-
     async def run_command(self, command):
         """run one command, command : (node, action, parameters)
         """
+        # TODO : will ZMQ ensure the message arriving the target node? 
+        #        if not, should we retry some times for one command?
         node, action, parameters = command
         self.cmd_cnt = self.cmd_cnt + 1
         cmd_id = str(self.id) + '-' + str(self.cmd_cnt)
@@ -441,7 +512,6 @@ class Worker(object):
         self.name = name
         self.master_pub_addr = master_pub_addr
         self.master_pull_addr = master_pull_addr
-        self.action_handlers = {'@join':self._join}
         # init loop, sockets and tasks
         self.loop = zmq.asyncio.ZMQEventLoop()
         asyncio.set_event_loop(self.loop)
@@ -456,6 +526,7 @@ class Worker(object):
         self.push_sock.connect('tcp://'+self.master_pull_addr)
         asyncio.ensure_future(self._sub_in())
         asyncio.ensure_future(self._try_join())
+        self.action_handlers = {'@join':self._join}
         self.pending_handlers = {'@nodeinfo':self._nodeinfo}
 
     def start(self):
@@ -531,6 +602,14 @@ class Worker(object):
         """
         def decorator(func):
             self.pending_handlers[action] = func
+            return func
+        return decorator
+
+    def undoAction(self, action):
+        """register handler of undo action. this is a wrapper of decorator
+        """
+        def decorator(func):
+            self.pending_handlers['undo@'+action] = func
             return func
         return decorator
 
