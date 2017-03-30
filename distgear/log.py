@@ -4,19 +4,20 @@ import logging
 import logging.handlers
 import sys
 
-def initLogger():
+def initLogger(log_level=logging.INFO, std_to_log=False):
     global logger 
     logger = logging.getLogger('distgear')
-    logfile = 'distgear.log'
-    loglevel = logging.INFO
+    loglevel = log_level
     logger.setLevel(loglevel)
+    #logfile = 'distgear.log'
     #handler = logging.handlers.TimedRotatingFileHandler(logfile, when="midnight", backupCount=loglevel)
     handler = logging.StreamHandler(stream=sys.stdout)
     formatter = logging.Formatter("%(asctime)s %(levelname)-8s %(module)s %(funcName)s [%(lineno)d] %(message)s")
     handler.setFormatter(formatter)
     logger.addHandler(handler)
-    #sys.stdout = RedirectLogger(logger, logging.INFO)
-    #sys.stderr = RedirectLogger(logger, logging.ERROR)
+    if std_to_log:
+        sys.stdout = RedirectLogger(logger, logging.INFO)
+        sys.stderr = RedirectLogger(logger, logging.ERROR)
 
 class RedirectLogger(object):
     def __init__(self, logger, level):

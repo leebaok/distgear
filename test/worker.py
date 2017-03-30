@@ -4,14 +4,15 @@ import sys
 import asyncio
 import random
 
-sys.path.append("../distgear")
-from app import Worker
+sys.path.append("..")
+import distgear
 
 if len(sys.argv)==1:
     print('worker.py NAME')
     exit(1)
 name = sys.argv[1]
-worker = Worker(name)
+
+worker = distgear.Worker(name)
 
 # define handlers for master
 @worker.doAction('myaction')
