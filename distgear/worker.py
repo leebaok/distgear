@@ -4,11 +4,12 @@ __all__ = ['Worker']
 
 import asyncio
 import zmq.asyncio
-import json
 import psutil
 
 #from .log import logger
 from . import log
+from .utils import zmq_send, zmq_recv
+
 logger = None
 
 async def nodeinfo(paras):
@@ -70,7 +71,7 @@ class Worker(object):
         4. _try_join wait for some time and then test if this node joins 
         """
         msg = {'event':'@NodeJoin', 'parameters':{'name':self.name}}
-        await self.push_sock.send_multipart([str.encode(json.dumps(msg))])
+        await zmq_send(self.push_sock, msg)
         await asyncio.sleep(3)
         if self.status == 'waiting':
             logger.warning('join master/supermaster failed, please check master/controller and worker...')
@@ -87,10 +88,7 @@ class Worker(object):
         """
         while(True):
             # recv (topic, msg)
-            msg = await self.sub_sock.recv_multipart()
-            msg = [ bytes.decode(x) for x in msg ]
-            logger.info('get message from sub:%s', str(msg))
-            command = json.loads(msg[1])
+            command = await zmq_recv(self.sub_sock, drop_topic=True)
             asyncio.ensure_future(self.runAction(command))
 
     async def runAction(self, command):
@@ -111,7 +109,7 @@ class Worker(object):
                 result = await self.action_handlers[name](paras)
                 command['result'] = result['result']
                 command['status'] = result['status']
-        await self.push_sock.send_multipart([ str.encode(json.dumps(command)) ])
+        await zmq_send(self.push_sock, command)
 
     def doAction(self, action):
         """register handler of action. this is a wrapper of decorator

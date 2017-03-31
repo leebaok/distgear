@@ -5,12 +5,17 @@ __all__ = ['Master', 'SuperMaster']
 import asyncio
 from aiohttp import web 
 import zmq.asyncio
-import json
 import copy
+import json
 
 #from .log import logger, initLogger
+# 'from .log import logger, initLogger' not work, because we call initLogger 
+# in the current file. before we call initLogger, log.logger is None, so 
+# 'from .log imoprt logger' will set logger as None. And then we call
+# initLogger will init the log.logger but not logger in this file
 from . import log
 from .event import Event
+from .utils import zmq_send, zmq_recv
 
 logger = None
 
@@ -22,8 +27,6 @@ async def nodejoin(event, master):
     paras = event.paras
     if 'name' not in paras:
         logger.warning('one node wants to join but without name')
-        # return is not necessary, because this event is raised by pull socket
-        # and it don't need a result
         return {'status':'fail', 'result':'no node name'}
     name = paras['name']
     command = (name, '@join', 'none')
@@ -177,15 +180,21 @@ class BaseMaster(object):
         """
         self.futures[cmd_id] = future
 
+    async def send_command(self, node, cmd, paras, cmd_id):
+        msg = {'command':cmd, 'parameters':paras, 'id':cmd_id}
+        # send (topic, msg)
+        await zmq_send(self.pub_sock, msg, topic=node)
+        future = asyncio.Future()
+        self.add_future(cmd_id, future)
+        await future
+        return future.result()
+
     async def _pull_in(self):
         """pull socket receive two types of messages: command result, event request
         """
         while(True):
             logger.info('waiting on pull socket')
-            msg = await self.pull_sock.recv_multipart()
-            msg = [ bytes.decode(x) for x in msg ]
-            logger.info('message from pull socket:%s', str(msg))
-            content = json.loads(msg[0])
+            content = await zmq_recv(self.pull_sock)
             if 'event' in content:
                 self.raiseEvent(content)
             else:
@@ -290,7 +299,7 @@ class Master(BaseMaster):
 
     async def _try_join(self):
         msg = {'event':'@NodeJoin', 'parameters':{'name':self.name}}
-        await self.push_sock.send_multipart([str.encode(json.dumps(msg))])
+        await zmq_send(self.push_sock, msg)
         await asyncio.sleep(3)
         if self.status == 'waiting':
             logger.warning('join master/supermaster failed, please check master/controller and worker...')
@@ -300,10 +309,7 @@ class Master(BaseMaster):
 
     async def _sub_in(self):
         while(True):
-            msg = await self.sub_sock.recv_multipart()
-            msg = [ bytes.decode(x) for x in msg ]
-            logger.info('get message from sub:%s', str(msg))
-            command = json.loads(msg[1])
+            command = await zmq_recv(self.sub_sock, drop_topic=True)
             # raise Event Handler to handle the event and the handler 
             # wrap event handler to wrap the result in the valid format
             asyncio.ensure_future(self._wrapper_handler(command))
@@ -319,5 +325,5 @@ class Master(BaseMaster):
         result = await self.processEvent(eventinfo)
         command['result'] = result.get('result', 'result not valid')
         command['status'] = result.get('status', 'fail')
-        await self.push_sock.send_multipart([ str.encode(json.dumps(command)) ])
+        await zmq_send(self.push_sock, command)
 

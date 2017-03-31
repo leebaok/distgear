@@ -3,11 +3,9 @@
 __all__ = ['Event']
 
 import asyncio
-import json
 
 #from .log import logger
 from . import log
-
 
 class Event(object):
     count = 0
@@ -116,7 +114,7 @@ class Event(object):
                 step 2: wait for some task finish and update ready queue
             if some task runs failed:
                 if rollback is False, the tasks depending on it will not run
-                if rollback is True, all done tasks will be undid
+                if rollback is True, all done tasks will be undo
             by the way, if some task failed, it means the event/action on the
             remote node is failed. And the remote event/action should clear the 
             things it has done
@@ -230,19 +228,16 @@ class Event(object):
         return results
 
     async def run_command(self, command):
-        """run one command, command : (node, action, parameters)
+        """run one command, command : (node, command, parameters)
         """
         # TODO : will ZMQ ensure the message arriving the target node? 
         #        if not, should we retry some times for one command?
-        node, action, parameters = command
+        if len(command) != 3:
+            return {'status':'fail', 'result':'command not valid'}
+        node, cmd, paras = command
         self.cmd_cnt = self.cmd_cnt + 1
         cmd_id = str(self.id) + '-' + str(self.cmd_cnt)
         log.logger.info('run command: %s with id: %s', str(command), str(cmd_id))
-        msg = json.dumps({'command':action, 'parameters':parameters, 'id':cmd_id})
-        # send (topic, msg)
-        await self.master.pub_sock.send_multipart([str.encode(node), str.encode(msg)])
-        future = asyncio.Future()
-        self.master.add_future(cmd_id, future)
-        await future
-        return future.result()
+        result = await self.master.send_command(node, cmd, paras, cmd_id)
+        return result
         
