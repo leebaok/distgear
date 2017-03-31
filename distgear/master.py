@@ -6,31 +6,86 @@ import asyncio
 from aiohttp import web 
 import zmq.asyncio
 import json
+import copy
 
-from .log import logger
+#from .log import logger, initLogger
+from . import log
 from .event import Event
 
-class BaseMaster(object):
-    """Master and Controller are subclass of BaseMaster
-      +-----------+
-      |   Event   |
-      |  Handler  |
-      +-----------+
-     ??          PUB ------- commands ------>
-     ??    Loop   |
-     ??         PULL <--- events,results ----
-      +-----------+
+logger = None
+
+async def nodejoin(event, master):
+    """new node joins, BaseMaster internal event. this event should be 
+    raised from pull socket. we will send '@join' command to the new node 
+    to test pub-sub channel and then wait for its reply
     """
-    def __init__(self, pub_addr='0.0.0.0:8001', pull_addr='0.0.0.0:8002'):
-        logger.info('BaseMaster init ...')
-        # init base configuration
+    paras = event.paras
+    if 'name' not in paras:
+        logger.warning('one node wants to join but without name')
+        # return is not necessary, because this event is raised by pull socket
+        # and it don't need a result
+        return {'status':'fail', 'result':'no node name'}
+    name = paras['name']
+    command = (name, '@join', 'none')
+    cmd_ret = await event.run_command(command)
+    if cmd_ret['status'] == 'success':
+        logger.info('new node:%s trys to join ...', name)
+        init_ret = await master.processEvent({'event':'@NewNode', 'parameters':name})
+        if init_ret['status'] == 'success':
+            master.add_node(name)
+            logger.info('new node:%s joins success', name)
+            return {'status':'success', 'result':'work join success'}
+    return {'status':'fail', 'result':'work reply failed'}
+
+async def newnode(event, master):
+    """Default do nothing. 
+    You should use master.handleEvent('@NewNode') to define your new node init event
+    """
+    return {'status':'success', 'result':'do nothing'}
+
+async def heartbeat(event, master):
+    """heartbeat event. BaseMaster internal event.
+    send '@nodeinfo' message to collect nodes information
+    """
+    nodes = master.get_nodes()
+    commands={}
+    for node in nodes:
+        commands[node] = (node, '@nodeinfo', None, [])
+    results = await event.run(commands)
+    for node in nodes:
+        ret = results[node]
+        if ret.get('status', 'fail') == 'success' and 'result' in ret:
+            master.set_nodeinfo(node, ret['result'])
+        else:
+            logger.warning('get node:%s heartbeat and info failed', node)
+            master.set_nodeinfo(node, None)
+    logger.info('Worker info:%s', str(master.get_nodeinfo()))
+    master.raiseEvent({'event':'@HeartBeat', 'parameters':None}, delay=5)
+    # heartbeat is raised by raiseEvent. its return is nouse, no one can get it
+    # but the return is necessary. because raiseEvent will call processEvent 
+    # and processEvent need event to return result
+    return {'status':'success', 'result':'heartbeat return nothing'}
+
+
+class BaseMaster(object):
+    """Master and SuperMaster are subclass of BaseMaster
+        +-----------+
+        |   Event   |
+        |  Handler  |
+        +-----------+
+       ??          PUB ------- commands ------>
+       ??    Loop   |
+       ??         PULL <--- events,results ----
+        +-----------+
+    """
+    def __init__(self, pub_addr='0.0.0.0:8001', pull_addr='0.0.0.0:8002', debug=False):
+        # init logger
+        global logger
+        log.initLogger(debug)
+        logger = log.logger
+        # init publish and pull sockets 
         self.pub_addr = pub_addr
         self.pull_addr = pull_addr
-        self.event_handlers = {'@NodeJoin':self._nodejoin}
-        self.nodes = []
-        self.nodeinfo = {}
-        self.futures = {}
-        # init loop, sockets and tasks
         self.loop = zmq.asyncio.ZMQEventLoop()
         asyncio.set_event_loop(self.loop)
         self.zmq_ctx = zmq.asyncio.Context()
@@ -38,34 +93,30 @@ class BaseMaster(object):
         self.pub_sock.bind('tcp://'+self.pub_addr)
         self.pull_sock = self.zmq_ctx.socket(zmq.PULL)
         self.pull_sock.bind('tcp://'+self.pull_addr)
+        # init some data structure 
+        self.event_handlers = {}
+        self._init_handlers()
+        self.nodes = []
+        self.nodeinfo = {}
+        self.futures = {}
+        # init some tasks
         asyncio.ensure_future(self._pull_in())
-        asyncio.ensure_future(self._heartbeat())
 
-    async def _nodejoin(self, event, master):
-        """new node joins, this event should be raised from pull socket.
-        here, we will send '@join' command to the new node to test pub-sub channel
-        and then wait for its reply
-        """
-        paras = event.paras
-        if 'name' not in paras:
-            logger.warning('one node wants to join but without name')
-            # return is not necessary, because this event is raised by pull socket
-            # and it don't need a result
-            return {'status':'fail', 'result':'no node name'}
-        name = paras['name']
-        command = (name, '@join', 'none')
-        result = await event.run_command(command)
-        if result['status'] == 'success':
-            self.nodes.append(name)
-            logger.info('new node joins:%s', name)
-            # return is not necessary, because this event is raised by pull socket
-            # and it don't need a result
-            return {'status':'success', 'result':'work join success'}
+    def _init_handlers(self):
+        self.event_handlers['@NodeJoin'] = nodejoin
+        self.event_handlers['@NewNode'] = newnode
+        self.event_handlers['@HeartBeat'] = heartbeat
+
+    def add_node(self, name):
+        if name in self.nodes:
+            logger.warning('%s is already in nodes list', name)
         else:
-            return {'status':'fail', 'result':'work reply failed'}
+            logger.info('%s is added in nodes list', name)
+            self.nodes.append(name)
 
     def start(self):
-        logger.info('basemaster start ...')
+        logger.info('BaseMaster start ...')
+        self.raiseEvent({'event':'@HeartBeat', 'parameters':None}, delay=5)
         try:
             self.loop.run_forever()
         except KeyboardInterrupt:
@@ -73,32 +124,53 @@ class BaseMaster(object):
         self.stop()
 
     def stop(self):
-        logger.info('basemaster stop ...')
+        logger.info('BaseMaster stop ...')
         tasks = asyncio.Task.all_tasks(self.loop)
         for task in tasks:
             task.cancel()
         self.loop.run_until_complete(asyncio.wait(list(tasks)))
         self.loop.close()
-   
-    async def _heartbeat(self):
-        """heartbeat event, send 'nodeinfo' message to collect nodes information
-        """
-        while(True):
-            await asyncio.sleep(20)
-            nodes = [ node for node in self.nodes ]
-            event = Event('@HeartBeat', 'Nothing', self)
-            commands={}
-            for node in nodes:
-                commands[node] = (node, '@nodeinfo', 'Nothing', [])
-            results = await event.run(commands)
-            for node in nodes:
-                if results[node]['status'] == 'success':
-                    self.nodeinfo[node] = results[node]['result']
-                else:
-                    logger.warning('get node:%s heartbeat and info failed', node)
-                    self.nodeinfo[node] = None
-            logger.info('Worker info:%s', str(self.nodeinfo))
 
+    def get_nodes(self):
+        nodes = [ node for node in self.nodes ]
+        return nodes
+
+    def set_nodeinfo(self, name, info):
+        if name not in self.nodes:
+            logger.warning('set info of not unknown node:%s', name)
+        self.nodeinfo[name] = info
+
+    def get_nodeinfo(self):
+        nodeinfo = copy.deepcopy(self.nodeinfo)
+        return nodeinfo
+
+    async def processEvent(self, eventinfo):
+        """process event with event handler. eventinfo is a dict.
+        eventinfo =    {'event':name, 'parameters':parameters}
+                    or {'event':name, 'parameters':parameters, 'id':eventid}
+        """
+        if type(eventinfo) is not dict:
+            return {'status':'fail', 'result':'event info is not valid'}
+        name = eventinfo.get('event', None)
+        paras = eventinfo.get('parameters', None)
+        eventid = eventinfo.get('id', None)
+        if name is None or name not in self.event_handlers:
+            return {'status':'fail', 'result':'event name is not valid'}
+        event = Event(name, paras, self, eventid = eventid)
+        result = await self.event_handlers[name](event, self)
+        if 'status' not in result or 'result' not in result:
+            return {'status':'fail', 'result':result}
+        else:
+            return result
+
+    def _createTask(self, eventinfo):
+        asyncio.ensure_future(self.processEvent(eventinfo))
+
+    def raiseEvent(self, eventinfo, delay=0):
+        """create a new task to process event after delay seconds
+        """
+        self.loop.call_later(delay, self._createTask, eventinfo)
+   
     def add_future(self, cmd_id, future):
         """add future to self.futures and pull socket will get the result and 
         set the future
@@ -115,8 +187,7 @@ class BaseMaster(object):
             logger.info('message from pull socket:%s', str(msg))
             content = json.loads(msg[0])
             if 'event' in content:
-                event = Event(content['event'], content['parameters'], self)
-                asyncio.ensure_future(self.event_handlers[content['event']](event, self))
+                self.raiseEvent(content)
             else:
                 result = content
                 cmd_id = result['id']
@@ -142,22 +213,32 @@ class BaseMaster(object):
         return decorator
 
 class SuperMaster(BaseMaster):
-    def __init__(self, http_addr='0.0.0.0:8000', pub_addr='0.0.0.0:8001', pull_addr='0.0.0.0:8002'):
+    """SuperMaster
+               +-----------+
+               |   Event   |
+               |  Handler  |
+               +-----------+
+               |          PUB ------- commands ------>
+    events -> HTTP  Loop   |
+               |         PULL <--- events,results ----
+               +-----------+
+    """
+    def __init__(self, http_addr='0.0.0.0:8000', pub_addr='0.0.0.0:8001', pull_addr='0.0.0.0:8002', debug=False):
         """Master add a http server based on BaseMaster
         """
-        BaseMaster.__init__(self, pub_addr=pub_addr, pull_addr=pull_addr)
+        BaseMaster.__init__(self, pub_addr=pub_addr, pull_addr=pull_addr, debug=debug)
         self.http_addr = http_addr
-        addr,port = http_addr.split(':')
+        addr, port = http_addr.split(':')
         server = web.Server(self._http_handler)
         create_server = self.loop.create_server(server, addr, int(port))
         self.loop.run_until_complete(create_server)
         logger.info('create http server at http://%s', self.http_addr)
 
     async def _http_handler(self, request):
-        """handle http request. http request is to raise event and then 
+        """handle http request. http request is to create event and then 
         we handle the event 
         """
-        logger.info('url:%s', str(request.url))
+        logger.debug('url:%s', str(request.url))
         text = await request.text()
         logger.info('request content:%s', text)
         data = None
@@ -166,34 +247,39 @@ class SuperMaster(BaseMaster):
         except json.JSONDecodeError:
             logger.info('text is not json format')
             return web.Response(text = json.dumps({'status':'fail', 'result':'request invalid'}))
-        if 'event' not in data or 'parameters' not in data:
-            logger.info('request invalid')
-            return web.Response(text = json.dumps({'status':'fail', 'result':'request invalid'}))
-        elif data['event'] not in self.event_handlers:
-            logger.info('event not defined')
-            return web.Response(text = json.dumps({'status':'fail', 'result':'event undefined'}))
-        else:
-            logger.info('call event handler')
-            event = Event(data['event'], data['parameters'], self)
-            logger.info('process event:%s with id:%s', data['event'], str(event.id))
-            # web.Server will create new task of _http_handler to handle http request 
-            # so, 'await self.event_handlers[...](...)' is OK
-            # we don't need to create new task to run event handler
-            result = await self.event_handlers[data['event']](event, self)
-            logger.info('result from handler:%s', str(result))
-            return web.Response(text = json.dumps(result))
+        # web.Server will create new task of _http_handler to handle http request 
+        # so, 'await self.processEvent(...)' is OK
+        # we don't need to create new task to run event handler
+        result = await self.processEvent(data)
+        logger.info('process event with result:%s', str(result))
+        return web.Response(text = json.dumps(result))
+
+
+async def nodeinfo(event, master):
+    return {'status':'success', 'result':master.get_nodeinfo()}
 
 class Master(BaseMaster):
-    def __init__(self, name, upper_pub_addr='0.0.0.0:8001', upper_pull_addr='0.0.0.0:8002', my_pub_addr='0.0.0.0:8003', my_pull_addr='0.0.0.0:8004'):
-        BaseMaster.__init__(self, pub_addr=my_pub_addr, pull_addr=my_pull_addr)
+    """SuperMaster
+                +-----------+
+                |   Event   |
+                |  Handler  |
+                +-----------+
+     events -> SUB         PUB ------- commands ------>
+                |    Loop   |
+    results <- PUSH       PULL <--- events,results ----
+                +-----------+
+    """
+    def __init__(self, name, upper_pub_addr='0.0.0.0:8001', upper_pull_addr='0.0.0.0:8002', my_pub_addr='0.0.0.0:8003', my_pull_addr='0.0.0.0:8004', debug=False):
+        BaseMaster.__init__(self, pub_addr=my_pub_addr, pull_addr=my_pull_addr, debug=debug)
         self.name = name
         self.sub_sock = self.zmq_ctx.socket(zmq.SUB)
         self.sub_sock.connect('tcp://'+upper_pub_addr)
         self.sub_sock.setsockopt(zmq.SUBSCRIBE, str.encode(self.name))
         self.push_sock = self.zmq_ctx.socket(zmq.PUSH)
         self.push_sock.connect('tcp://'+upper_pull_addr)
+        # @join need to change self.status of worker, so put it inside Master
         self.event_handlers['@join'] = self._join
-        self.event_handlers['@nodeinfo'] = self._nodeinfo
+        self.event_handlers['@nodeinfo'] = nodeinfo
         self.status = 'waiting'
         asyncio.ensure_future(self._sub_in())
         asyncio.ensure_future(self._try_join())
@@ -202,18 +288,15 @@ class Master(BaseMaster):
         self.status = 'working'
         return {'status':'success', 'result':'joins OK'}
 
-    async def _nodeinfo(self, event, master):
-        return {'status':'success', 'result':self.nodeinfo}
-
     async def _try_join(self):
         msg = {'event':'@NodeJoin', 'parameters':{'name':self.name}}
         await self.push_sock.send_multipart([str.encode(json.dumps(msg))])
         await asyncio.sleep(3)
-        if self.status is 'waiting':
-            logger.warning('join master/controller failed, please check master/controller and worker...')
+        if self.status == 'waiting':
+            logger.warning('join master/supermaster failed, please check master/controller and worker...')
             self.stop()
         else:
-            logger.info('join master/controller success')
+            logger.info('join master/supermaster success')
 
     async def _sub_in(self):
         while(True):
@@ -229,16 +312,12 @@ class Master(BaseMaster):
         """wrap the event handler because we need to get the handler result and wrap it 
         in the valid format
         """
-        if ('command' or 'parameters' or 'id') not in command:
-            command['result'] = 'invalid command'
-            command['status'] = 'fail'
-        elif command['command'] not in self.event_handlers:
-            command['result'] = 'event not defined'
-            command['status'] = 'fail'
-        else:
-            event = Event(command['command'], command['parameters'], self, eventid=command['id'])
-            result = await self.event_handlers[command['command']](event, self)
-            command['result'] = result['result']
-            command['status'] = result['status']
+        eventinfo = { 'event': command.get('command', None),
+                      'parameters': command.get('parameters', None),
+                      'id': command.get('id', None)
+                      }
+        result = await self.processEvent(eventinfo)
+        command['result'] = result.get('result', 'result not valid')
+        command['status'] = result.get('status', 'fail')
         await self.push_sock.send_multipart([ str.encode(json.dumps(command)) ])
 

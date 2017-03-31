@@ -4,12 +4,17 @@ import logging
 import logging.handlers
 import sys
 
-def initLogger(log_level=logging.INFO, std_to_log=False):
+# maybe this module will be import many times
+# but it will be loaded only once according to python import policy
+logger = None
+
+def initLogger(name='distgear', debug=False, std_to_log=False):
     global logger 
-    logger = logging.getLogger('distgear')
-    loglevel = log_level
+    logger = logging.getLogger(name)
+    loglevel = logging.DEBUG if debug else logging.INFO
     logger.setLevel(loglevel)
-    #logfile = 'distgear.log'
+    #logpath = '.'
+    #logfile = path+'/'+name+'.log'
     #handler = logging.handlers.TimedRotatingFileHandler(logfile, when="midnight", backupCount=loglevel)
     handler = logging.StreamHandler(stream=sys.stdout)
     formatter = logging.Formatter("%(asctime)s %(levelname)-8s %(module)s %(funcName)s [%(lineno)d] %(message)s")
@@ -32,10 +37,4 @@ class RedirectLogger(object):
     def flush(self):
         for handler in self.logger.handlers:
             handler.flush()
-
-
-# maybe this module will be import many times
-# but it will be loaded only once according to python import policy
-logger = None
-initLogger()
 

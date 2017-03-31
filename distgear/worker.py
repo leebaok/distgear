@@ -7,10 +7,23 @@ import zmq.asyncio
 import json
 import psutil
 
-from .log import logger
+#from .log import logger
+from . import log
+logger = None
+
+async def nodeinfo(paras):
+    """nodeinfo action, return system info
+    """
+    memload = psutil.virtual_memory().percent
+    cpuload = psutil.cpu_percent()
+    return { 'status':'success', 'result': {'mem':memload, 'cpu':cpuload} }
 
 class Worker(object):
-    def __init__(self, name, master_pub_addr='127.0.0.1:8003', master_pull_addr='127.0.0.1:8004'):
+    def __init__(self, name, master_pub_addr='127.0.0.1:8003', master_pull_addr='127.0.0.1:8004', debug=False):
+        # init logger 
+        global logger
+        log.initLogger(debug)
+        logger = log.logger
         logger.info('init worker ...')
         # init base configurations
         self.name = name
@@ -30,8 +43,9 @@ class Worker(object):
         self.push_sock.connect('tcp://'+self.master_pull_addr)
         asyncio.ensure_future(self._sub_in())
         asyncio.ensure_future(self._try_join())
-        self.action_handlers = {'@join':self._join}
-        self.pending_handlers = {'@nodeinfo':self._nodeinfo}
+        self.action_handlers = {}
+        self.action_handlers['@join'] = self._join
+        self.action_handlers['@nodeinfo'] = nodeinfo
 
     def start(self):
         logger.info('worker start ...')
@@ -58,24 +72,15 @@ class Worker(object):
         msg = {'event':'@NodeJoin', 'parameters':{'name':self.name}}
         await self.push_sock.send_multipart([str.encode(json.dumps(msg))])
         await asyncio.sleep(3)
-        if '@nodeinfo' not in self.action_handlers:
-            logger.warning('join master/controller failed, please check master/controller and worker...')
+        if self.status == 'waiting':
+            logger.warning('join master/supermaster failed, please check master/controller and worker...')
             self.stop()
         else:
-            logger.info('join master/controller success')
+            logger.info('join master/supermaster success')
 
     async def _join(self, paras):
-        for key in self.pending_handlers:
-            self.action_handlers[key] = self.pending_handlers[key]
-        self.pending_handlers.clear()            
+        self.status = 'working'
         return {'status':'success', 'result':'joins OK'}
-
-    async def _nodeinfo(self, paras):
-        """nodeinfo action, return system info
-        """
-        memload = psutil.virtual_memory().percent
-        cpuload = psutil.cpu_percent()
-        return { 'status':'success', 'result': {'mem':memload, 'cpu':cpuload} }
 
     async def _sub_in(self):
         """receive commands from sub socket
@@ -86,26 +91,33 @@ class Worker(object):
             msg = [ bytes.decode(x) for x in msg ]
             logger.info('get message from sub:%s', str(msg))
             command = json.loads(msg[1])
-            asyncio.ensure_future(self._run_action(command))
+            asyncio.ensure_future(self.runAction(command))
 
-    async def _run_action(self, command):
-        if ('command' or 'parameters' or 'id') not in command:
-            command['result'] = 'invalid command'
+    async def runAction(self, command):
+        """run action with action handler. command is a dict.
+        command = { 'command':name, 'parameters':paras, 'id':actionid }
+        """
+        if type(command) is not dict:
             command['status'] = 'fail'
-        elif command['command'] not in self.action_handlers:
-            command['result'] = 'action not defined'
-            command['status'] = 'fail'
+            command['result'] = 'command is not valid'
         else:
-            result = await self.action_handlers[command['command']](command['parameters'])
-            command['result'] = result['result']
-            command['status'] = result['status']
+            name = command.get('command', None)
+            paras = command.get('parameters', None)
+            actionid = command.get('id', None)
+            if name not in self.action_handlers or actionid is None:
+                command['status'] = 'fail'
+                command['result'] = 'command is not valid'
+            else:
+                result = await self.action_handlers[name](paras)
+                command['result'] = result['result']
+                command['status'] = result['status']
         await self.push_sock.send_multipart([ str.encode(json.dumps(command)) ])
 
     def doAction(self, action):
         """register handler of action. this is a wrapper of decorator
         """
         def decorator(func):
-            self.pending_handlers[action] = func
+            self.action_handlers[action] = func
             return func
         return decorator
 
@@ -113,7 +125,7 @@ class Worker(object):
         """register handler of undo action. this is a wrapper of decorator
         """
         def decorator(func):
-            self.pending_handlers['undo@'+action] = func
+            self.action_handlers['undo@'+action] = func
             return func
         return decorator
 

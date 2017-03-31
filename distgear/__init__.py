@@ -29,6 +29,6 @@
 from .master import Master, SuperMaster
 from .worker import Worker
 
-__all__ = (master.__all__ +
-           worker.__all__ )
+__all__ = ( master.__all__ +
+            worker.__all__ )
 

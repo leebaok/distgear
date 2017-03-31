@@ -5,7 +5,8 @@ __all__ = ['Event']
 import asyncio
 import json
 
-from .log import logger
+#from .log import logger
+from . import log
 
 
 class Event(object):
@@ -24,7 +25,7 @@ class Event(object):
     async def run_without_rollback(self, commands):
         """run multi commands, commands is a dict
         """
-        logger.info('run commands:%s', str(commands))
+        log.logger.info('run commands:%s', str(commands))
         """
             commands :
                 'a':('node-1', 'act-1', 'para-1', [])
@@ -48,7 +49,7 @@ class Event(object):
                 ready.append(key)
             for dep in deps:
                 graph[dep][0].append(key)
-        logger.info('graph:%s', str(graph))
+        log.logger.info('graph:%s', str(graph))
         """
             ready is tasks ready to run
             pendtasks is tasks running
@@ -57,18 +58,18 @@ class Event(object):
                 step 2: wait for some task finish and update ready queue
         """
         while(ready or pendtasks):
-            logger.info('ready:%s', str(ready))
-            logger.info('pendtasks:%s', str(pendtasks))
+            log.logger.info('ready:%s', str(ready))
+            log.logger.info('pendtasks:%s', str(pendtasks))
             for x in ready:
-                logger.info('create task for:%s', str(commands[x]))
+                log.logger.info('create task for:%s', str(commands[x]))
                 task = asyncio.ensure_future(self.run_command(commands[x][:3]))
                 tasknames[task] = x
                 pendtasks.append(task)
             ready.clear()
             if pendtasks:
-                logger.info('wait for:%s', str(pendtasks))
+                log.logger.info('wait for:%s', str(pendtasks))
                 done, pend = await asyncio.wait(pendtasks, return_when=asyncio.FIRST_COMPLETED)
-                logger.info('task done:%s', str(done))
+                log.logger.info('task done:%s', str(done))
                 for task in done:
                     pendtasks.remove(task)
                     name = tasknames[task]
@@ -77,7 +78,7 @@ class Event(object):
                         graph[succ][1] = graph[succ][1]-1
                         if graph[succ][1] == 0:
                             ready.append(succ)
-        logger.info('result:%s', str(results))
+        log.logger.info('result:%s', str(results))
         return results
 
     async def run(self, commands, rollback=False):
@@ -85,7 +86,7 @@ class Event(object):
         Now, we only support worker to undo actions
         so, rollback only could be used when the event is to send commands to workers
         """
-        logger.info('run commands:%s', str(commands))
+        log.logger.info('run commands:%s', str(commands))
         """
             commands :
                 'a':('node-1', 'act-1', 'para-1', [])
@@ -106,7 +107,7 @@ class Event(object):
             graph[key][1] = len(deps)
             for dep in deps:
                 graph[dep][0].append(key)
-        logger.info('graph:%s', str(graph))
+        log.logger.info('graph:%s', str(graph))
         """
             ready is tasks ready to run
             pendtasks is tasks running
@@ -126,18 +127,18 @@ class Event(object):
                 ready.append(key)
         stop = False
         while(ready or pendtasks):
-            logger.info('ready:%s', str(ready))
-            logger.info('pendtasks:%s', str(pendtasks))
+            log.logger.info('ready:%s', str(ready))
+            log.logger.info('pendtasks:%s', str(pendtasks))
             for x in ready:
-                logger.info('create task for:%s', str(commands[x]))
+                log.logger.info('create task for:%s', str(commands[x]))
                 task = asyncio.ensure_future(self.run_command(commands[x][:3]))
                 tasknames[task] = x
                 pendtasks.append(task)
             ready.clear()
             if pendtasks:
-                logger.info('wait for:%s', str(pendtasks))
+                log.logger.info('wait for:%s', str(pendtasks))
                 done, pend = await asyncio.wait(pendtasks, return_when=asyncio.FIRST_COMPLETED)
-                logger.info('task done:%s', str(done))
+                log.logger.info('task done:%s', str(done))
                 for task in done:
                     pendtasks.remove(task)
                     name = tasknames[task]
@@ -180,11 +181,11 @@ class Event(object):
             based on the back graph and topological sorting, we can rollback commands in correct sequence
         """
         if not stop:
-            logger.info('result:%s', str(results))
+            log.logger.info('result:%s', str(results))
             return results
         # stop==True means rollback and some command runs failed
         # now, do rollback work
-        logger.info('RollBack begin ...')
+        log.logger.info('RollBack begin ...')
         undocmds = []
         for key in results:
             if results[key]['status']=='success':
@@ -202,20 +203,20 @@ class Event(object):
             if backgraph[key][1] == 0:
                 ready.append(key)
         while(ready or pendtasks):
-            logger.info('ready:%s', str(ready))
-            logger.info('pendtasks:%s', str(pendtasks))
+            log.logger.info('ready:%s', str(ready))
+            log.logger.info('pendtasks:%s', str(pendtasks))
             for x in ready:
                 node, cmd, paras, _ = commands[x]
                 command = (node, 'undo@'+cmd, paras)
-                logger.info('create task for:%s', str(command))
+                log.logger.info('create task for:%s', str(command))
                 task = asyncio.ensure_future(self.run_command(command))
                 tasknames[task] = x
                 pendtasks.append(task)
             ready.clear()
             if pendtasks:
-                logger.info('wait for:%s', str(pendtasks))
+                log.logger.info('wait for:%s', str(pendtasks))
                 done, pend = await asyncio.wait(pendtasks, return_when=asyncio.FIRST_COMPLETED)
-                logger.info('task done:%s', str(done))
+                log.logger.info('task done:%s', str(done))
                 for task in done:
                     pendtasks.remove(task)
                     name = tasknames[task]
@@ -225,7 +226,7 @@ class Event(object):
                         if backgraph[prec][1] == 0:
                             ready.append(prec)
 
-        logger.info('result:%s', str(results))
+        log.logger.info('result:%s', str(results))
         return results
 
     async def run_command(self, command):
@@ -236,7 +237,7 @@ class Event(object):
         node, action, parameters = command
         self.cmd_cnt = self.cmd_cnt + 1
         cmd_id = str(self.id) + '-' + str(self.cmd_cnt)
-        logger.info('run command: %s with id: %s', str(command), str(cmd_id))
+        log.logger.info('run command: %s with id: %s', str(command), str(cmd_id))
         msg = json.dumps({'command':action, 'parameters':parameters, 'id':cmd_id})
         # send (topic, msg)
         await self.master.pub_sock.send_multipart([str.encode(node), str.encode(msg)])
