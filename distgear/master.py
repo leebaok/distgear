@@ -166,13 +166,21 @@ class BaseMaster(object):
         else:
             return result
 
-    def _createTask(self, eventinfo):
-        asyncio.ensure_future(self.processEvent(eventinfo))
+    def _createTask(self, eventinfo, future):
+        """create a new task to process the event. when the task is done, 
+        call the lambda function to put its result to the future
+        """
+        task = asyncio.ensure_future(self.processEvent(eventinfo))
+        task.add_done_callback(lambda thistask: future.set_result(thistask.result()))
 
     def raiseEvent(self, eventinfo, delay=0):
-        """create a new task to process event after delay seconds
+        """create a new task to process event after delay seconds.
+        return a future. if you want to know the result of event, 
+        you can get it from the future
         """
-        self.loop.call_later(delay, self._createTask, eventinfo)
+        future = asyncio.Future()
+        self.loop.call_later(delay, self._createTask, eventinfo, future)
+        return future 
    
     def add_future(self, cmd_id, future):
         """add future to self.futures and pull socket will get the result and 
