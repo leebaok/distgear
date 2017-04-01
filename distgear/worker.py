@@ -22,6 +22,7 @@ class Worker(object):
         self.log = createLogger(name=name, debug=debug)
         # init base configurations
         self.name = name
+        self.status = 'waiting'
         self.master_pub_addr = master_pub_addr
         self.master_pull_addr = master_pull_addr
         # init loop, sockets and tasks
@@ -51,11 +52,15 @@ class Worker(object):
         self.stop()
 
     def stop(self):
+        self.log.info('Worker stop ...')
         tasks = asyncio.Task.all_tasks(self.loop)
         for task in tasks:
             task.cancel()
         self.loop.run_until_complete(asyncio.wait(list(tasks)))
         self.loop.close()
+        #self.sub_sock.close()
+        #self.push_sock.close()
+        #self.zmq_ctx.destroy()
 
     async def _try_join(self):
         """try to join master/controller.
@@ -69,7 +74,7 @@ class Worker(object):
         await asyncio.sleep(2)
         if self.status == 'waiting':
             self.log.error('join master/supermaster failed, please check master/supermaster and worker...')
-            self.stop()
+            self.loop.stop()
         else:
             self.log.info('join master/supermaster success')
 

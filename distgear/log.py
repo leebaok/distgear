@@ -8,7 +8,7 @@ def createLogger(name='distgear', debug=False, std_to_log=False):
     logger = logging.getLogger(name)
     loglevel = logging.DEBUG if debug else logging.INFO
     logger.setLevel(loglevel)
-    #logpath = '.'
+    #path = '.'
     #logfile = path+'/'+name+'.log'
     #handler = logging.handlers.TimedRotatingFileHandler(logfile, when="midnight", backupCount=loglevel)
     handler = logging.StreamHandler(stream=sys.stdout)

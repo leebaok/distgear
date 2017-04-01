@@ -49,7 +49,7 @@ async def heartbeat(event, master):
     commands={}
     for node in nodes:
         commands[node] = (node, '@nodeinfo', None, [])
-    results = await event.run(commands)
+    results = await event.run(commands, command_timeout=1, command_retry=2)
     for node in nodes:
         ret = results[node]
         if ret.get('status', 'fail') == 'success' and 'result' in ret:
@@ -311,7 +311,7 @@ class Master(BaseMaster):
         await asyncio.sleep(2)
         if self.status == 'waiting':
             self.log.error('join master/supermaster failed, please check master/supermaster and worker...')
-            self.stop()
+            self.loop.stop()
         else:
             self.log.info('join master/supermaster success')
 
