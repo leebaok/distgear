@@ -4,12 +4,7 @@ import logging
 import logging.handlers
 import sys
 
-# maybe this module will be import many times
-# but it will be loaded only once according to python import policy
-logger = None
-
-def initLogger(name='distgear', debug=False, std_to_log=False):
-    global logger 
+def createLogger(name='distgear', debug=False, std_to_log=False):
     logger = logging.getLogger(name)
     loglevel = logging.DEBUG if debug else logging.INFO
     logger.setLevel(loglevel)
@@ -23,6 +18,7 @@ def initLogger(name='distgear', debug=False, std_to_log=False):
     if std_to_log:
         sys.stdout = RedirectLogger(logger, logging.INFO)
         sys.stderr = RedirectLogger(logger, logging.ERROR)
+    return logger
 
 class RedirectLogger(object):
     def __init__(self, logger, level):

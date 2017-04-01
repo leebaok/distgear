@@ -12,22 +12,29 @@ if len(sys.argv)==1:
     exit(1)
 name = sys.argv[1]
 
-worker = distgear.Worker(name)
+worker = distgear.Worker(name, debug=False)
 
 # define handlers for master
 @worker.doAction('myaction')
 async def testaction(paras):
-    print('<Worker.myaction> : '+str(paras))
-    await asyncio.sleep(random.randint(0,1))
-    if paras=='c':
-        return {'status':'fail', 'result':'test fail'}
-    return {'status':'success', 'result':'action done'}
+    print('Worker: myaction with parameters: %s' % str(paras))
+    time = random.randint(0,5)
+    print('Worker: myaction need time : %s' % str(time))
+    await asyncio.sleep(time)
+    if paras=='d':
+        result = {'status':'fail', 'result':'test fail'}
+    else:
+        result = {'status':'success', 'result':'action done'}
+    print('Worker: myaction with result: %s' % str(result))
+    return result
 
 @worker.undoAction('myaction')
 async def testundoaction(paras):
-    print('<Worker.undomyaction> : '+str(paras))
-    await asyncio.sleep(random.randint(0,1))
-    return {'status':'success', 'result':'undo action of '+str(paras)}
+    print('Worker: undo myaction with parameters: %s' % str(paras))
+    await asyncio.sleep(random.randint(0,2))
+    result = {'status':'success', 'result':'undo action'}
+    print('Worker: undo myaction with result: %s' % str(result))
+    return result
 
 
 worker.start()

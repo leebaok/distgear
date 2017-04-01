@@ -4,14 +4,12 @@ __all__ = ['Event']
 
 import asyncio
 
-#from .log import logger
-from . import log
-
 class Event(object):
     count = 0
     def __init__(self, name, paras, master, eventid = None):
         Event.count = Event.count+1
         self.master = master
+        self.log = master.log
         if not eventid:
             self.id = Event.count
         else:
@@ -23,7 +21,7 @@ class Event(object):
     async def run_without_rollback(self, commands):
         """run multi commands, commands is a dict
         """
-        log.logger.info('run commands:%s', str(commands))
+        self.log.debug('run commands:%s', str(commands))
         """
             commands :
                 'a':('node-1', 'act-1', 'para-1', [])
@@ -47,7 +45,7 @@ class Event(object):
                 ready.append(key)
             for dep in deps:
                 graph[dep][0].append(key)
-        log.logger.info('graph:%s', str(graph))
+        self.log.debug('graph:%s', str(graph))
         """
             ready is tasks ready to run
             pendtasks is tasks running
@@ -56,18 +54,18 @@ class Event(object):
                 step 2: wait for some task finish and update ready queue
         """
         while(ready or pendtasks):
-            log.logger.info('ready:%s', str(ready))
-            log.logger.info('pendtasks:%s', str(pendtasks))
+            self.log.debug('ready:%s', str(ready))
+            self.log.debug('pendtasks:%s', str(pendtasks))
             for x in ready:
-                log.logger.info('create task for:%s', str(commands[x]))
+                self.log.debug('create task for:%s', str(commands[x]))
                 task = asyncio.ensure_future(self.run_command(commands[x][:3]))
                 tasknames[task] = x
                 pendtasks.append(task)
             ready.clear()
             if pendtasks:
-                log.logger.info('wait for:%s', str(pendtasks))
+                self.log.debug('wait for:%s', str(pendtasks))
                 done, pend = await asyncio.wait(pendtasks, return_when=asyncio.FIRST_COMPLETED)
-                log.logger.info('task done:%s', str(done))
+                self.log.debug('task done:%s', str(done))
                 for task in done:
                     pendtasks.remove(task)
                     name = tasknames[task]
@@ -76,15 +74,15 @@ class Event(object):
                         graph[succ][1] = graph[succ][1]-1
                         if graph[succ][1] == 0:
                             ready.append(succ)
-        log.logger.info('result:%s', str(results))
+        self.log.debug('result:%s', str(results))
         return results
 
-    async def run(self, commands, rollback=False):
+    async def run(self, commands, rollback=False, command_timeout=30, command_retry=3):
         """run multi commands, commands is a dict
         Now, we only support worker to undo actions
         so, rollback only could be used when the event is to send commands to workers
         """
-        log.logger.info('run commands:%s', str(commands))
+        self.log.debug('run commands:%s', str(commands))
         """
             commands :
                 'a':('node-1', 'act-1', 'para-1', [])
@@ -105,7 +103,7 @@ class Event(object):
             graph[key][1] = len(deps)
             for dep in deps:
                 graph[dep][0].append(key)
-        log.logger.info('graph:%s', str(graph))
+        self.log.debug('graph:%s', str(graph))
         """
             ready is tasks ready to run
             pendtasks is tasks running
@@ -125,24 +123,24 @@ class Event(object):
                 ready.append(key)
         stop = False
         while(ready or pendtasks):
-            log.logger.info('ready:%s', str(ready))
-            log.logger.info('pendtasks:%s', str(pendtasks))
+            self.log.debug('ready:%s', str(ready))
+            self.log.debug('pendtasks:%s', str(pendtasks))
             for x in ready:
-                log.logger.info('create task for:%s', str(commands[x]))
-                task = asyncio.ensure_future(self.run_command(commands[x][:3]))
+                self.log.debug('create task for:%s', str(commands[x]))
+                task = asyncio.ensure_future(self.run_command(commands[x][:3], timeout=command_timeout, retry=command_retry))
                 tasknames[task] = x
                 pendtasks.append(task)
             ready.clear()
             if pendtasks:
-                log.logger.info('wait for:%s', str(pendtasks))
+                self.log.debug('wait for:%s', str(pendtasks))
                 done, pend = await asyncio.wait(pendtasks, return_when=asyncio.FIRST_COMPLETED)
-                log.logger.info('task done:%s', str(done))
+                self.log.debug('task done:%s', str(done))
                 for task in done:
                     pendtasks.remove(task)
                     name = tasknames[task]
                     results[name] = task.result()
                     result = task.result()
-                    if stop or ('status' not in result) or (result['status'] == 'fail'):
+                    if stop or ('status' not in result) or (result['status'] != 'success'):
                         if rollback:
                             stop = True
                         continue
@@ -179,11 +177,11 @@ class Event(object):
             based on the back graph and topological sorting, we can rollback commands in correct sequence
         """
         if not stop:
-            log.logger.info('result:%s', str(results))
+            self.log.debug('result:%s', str(results))
             return results
         # stop==True means rollback and some command runs failed
         # now, do rollback work
-        log.logger.info('RollBack begin ...')
+        self.log.debug('RollBack begin ...')
         undocmds = []
         for key in results:
             if results[key]['status']=='success':
@@ -201,20 +199,20 @@ class Event(object):
             if backgraph[key][1] == 0:
                 ready.append(key)
         while(ready or pendtasks):
-            log.logger.info('ready:%s', str(ready))
-            log.logger.info('pendtasks:%s', str(pendtasks))
+            self.log.debug('ready:%s', str(ready))
+            self.log.debug('pendtasks:%s', str(pendtasks))
             for x in ready:
                 node, cmd, paras, _ = commands[x]
                 command = (node, 'undo@'+cmd, paras)
-                log.logger.info('create task for:%s', str(command))
-                task = asyncio.ensure_future(self.run_command(command))
+                self.log.debug('create task for:%s', str(command))
+                task = asyncio.ensure_future(self.run_command(command, timeout=command_timeout, retry=command_retry))
                 tasknames[task] = x
                 pendtasks.append(task)
             ready.clear()
             if pendtasks:
-                log.logger.info('wait for:%s', str(pendtasks))
+                self.log.debug('wait for:%s', str(pendtasks))
                 done, pend = await asyncio.wait(pendtasks, return_when=asyncio.FIRST_COMPLETED)
-                log.logger.info('task done:%s', str(done))
+                self.log.debug('task done:%s', str(done))
                 for task in done:
                     pendtasks.remove(task)
                     name = tasknames[task]
@@ -224,20 +222,27 @@ class Event(object):
                         if backgraph[prec][1] == 0:
                             ready.append(prec)
 
-        log.logger.info('result:%s', str(results))
+        self.log.debug('result:%s', str(results))
         return results
 
-    async def run_command(self, command):
+    async def run_command(self, command, timeout=30, retry=1, retry_if_fail=False):
         """run one command, command : (node, command, parameters)
+            :retry -- times to retry command, retry when timeout by default
+            :retry_if_fail -- if runs failed, retry command
         """
-        # TODO : will ZMQ ensure the message arriving the target node? 
-        #        if not, should we retry some times for one command?
         if len(command) != 3:
             return {'status':'fail', 'result':'command not valid'}
         node, cmd, paras = command
         self.cmd_cnt = self.cmd_cnt + 1
         cmd_id = str(self.id) + '-' + str(self.cmd_cnt)
-        log.logger.info('run command: %s with id: %s', str(command), str(cmd_id))
-        result = await self.master.send_command(node, cmd, paras, cmd_id)
+        self.log.debug('run command: %s with id: %s', str(command), str(cmd_id))
+        if retry <= 0:
+            retry = 1
+        for i in range(retry):
+            result = await self.master.send_command(node, cmd, paras, cmd_id, timeout=timeout)
+            if result['status'] == 'timeout' or (retry_if_fail and result['status'] == 'fail'):
+                pass
+            else:
+                break
         return result
         

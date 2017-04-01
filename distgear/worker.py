@@ -6,11 +6,8 @@ import asyncio
 import zmq.asyncio
 import psutil
 
-#from .log import logger
-from . import log
+from .log import createLogger
 from .utils import zmq_send, zmq_recv
-
-logger = None
 
 async def nodeinfo(paras):
     """nodeinfo action, return system info
@@ -22,10 +19,7 @@ async def nodeinfo(paras):
 class Worker(object):
     def __init__(self, name, master_pub_addr='127.0.0.1:8003', master_pull_addr='127.0.0.1:8004', debug=False):
         # init logger 
-        global logger
-        log.initLogger(debug)
-        logger = log.logger
-        logger.info('init worker ...')
+        self.log = createLogger(name=name, debug=debug)
         # init base configurations
         self.name = name
         self.master_pub_addr = master_pub_addr
@@ -49,7 +43,7 @@ class Worker(object):
         self.action_handlers['@nodeinfo'] = nodeinfo
 
     def start(self):
-        logger.info('worker start ...')
+        self.log.info('worker start ...')
         try:
             self.loop.run_forever()
         except KeyboardInterrupt:
@@ -72,12 +66,12 @@ class Worker(object):
         """
         msg = {'event':'@NodeJoin', 'parameters':{'name':self.name}}
         await zmq_send(self.push_sock, msg)
-        await asyncio.sleep(3)
+        await asyncio.sleep(2)
         if self.status == 'waiting':
-            logger.warning('join master/supermaster failed, please check master/controller and worker...')
+            self.log.error('join master/supermaster failed, please check master/supermaster and worker...')
             self.stop()
         else:
-            logger.info('join master/supermaster success')
+            self.log.info('join master/supermaster success')
 
     async def _join(self, paras):
         self.status = 'working'
