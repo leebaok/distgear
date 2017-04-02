@@ -40,6 +40,18 @@ async def newnode(event, master):
     """
     return {'status':'success', 'result':'do nothing'}
 
+async def nodelost(event, master):
+    """Default remove the lost node
+    If you want to do more things, please use master.handlerEvent('@NodeLost') to define 
+    your own handler
+    """
+    paras = event.paras
+    if 'node' not in paras:
+        return {'status':'fail', 'result':'no node in parameters'}
+    node = paras['node']
+    master.remove_node(node)
+    return {'status':'success', 'result':'remove node:%s from master node list'%node}
+
 async def heartbeat(event, master):
     """heartbeat event. BaseMaster internal event.
     send '@nodeinfo' message to collect nodes information
@@ -56,14 +68,13 @@ async def heartbeat(event, master):
             master.set_nodeinfo(node, ret['result'])
         else:
             logger.warning('get node:%s heartbeat and info failed', node)
-            master.set_nodeinfo(node, None)
+            await master.processEvent({'event':'@NodeLost', 'parameters':{'node':node}})
     logger.debug('Worker info:%s', str(master.get_nodeinfo()))
     master.raiseEvent({'event':'@HeartBeat', 'parameters':None}, delay=5)
     # heartbeat is raised by raiseEvent. its return is nouse.
     # but the return is necessary. because raiseEvent will call processEvent 
     # and processEvent need event to return result
     return {'status':'success', 'result':'heartbeat return nothing'}
-
 
 class BaseMaster(object):
     """Master and SuperMaster are subclass of BaseMaster
@@ -103,6 +114,7 @@ class BaseMaster(object):
         self.event_handlers['@NodeJoin'] = nodejoin
         self.event_handlers['@NewNode'] = newnode
         self.event_handlers['@HeartBeat'] = heartbeat
+        self.event_handlers['@NodeLost'] = nodelost
 
     def add_node(self, name):
         if name in self.nodes:
@@ -110,6 +122,17 @@ class BaseMaster(object):
         else:
             self.log.info('%s is added in nodes list', name)
             self.nodes.append(name)
+
+    def remove_node(self, name):
+        self.log.warning('remove node:%s from nodes and nodeinfo', name)
+        if name not in self.nodes:
+            self.log.warning('%s is not in nodes list, unable to remove it', name)
+        else:
+            self.nodes.remove(name)
+        if name not in self.nodeinfo:
+            self.log.warning('%s is not in nodeinfo, unable to remove it', name)
+        else:
+            del self.nodeinfo[name]
 
     def start(self):
         self.log.info('Master start ...')
