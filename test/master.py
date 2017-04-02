@@ -17,14 +17,14 @@ async def testevent(event, master):
         return {'result':'no workers', 'status':'fail'}
     node = nodes[random.randint(0, len(nodes)-1)]
     commands = {
-                'a':(node, 'myaction', 'a', []), 
-                'b':(node, 'myaction', 'b', []), 
-                'c':(node, 'myaction', 'c', ['a','b']), 
-                'd':(node, 'myaction', 'd', ['c']), 
-                'e':(node, 'myaction', 'e', []), 
-                'f':(node, 'myaction', 'f', ['d','e']), 
+            'a':(node, 'myaction', {'time':1,'name':'a','ret':'success'}, []), 
+            'b':(node, 'myaction', {'time':1,'name':'b','ret':'success'}, []), 
+            'c':(node, 'myaction', {'time':1,'name':'c','ret':'success'}, ['a','b']), 
+            'd':(node, 'myaction', {'time':5,'name':'d','ret':'success'}, ['c']), 
+            'e':(node, 'myaction', {'time':1,'name':'e','ret':'success'}, []), 
+            'f':(node, 'myaction', {'time':1,'name':'f','ret':'success'}, ['d','e']), 
             }
-    results = await event.run(commands, rollback=False, command_timeout=2, command_retry=3)
+    results = await event.run(commands, rollback=True, command_timeout=2, command_retry=3)
     print('Master: subevent with result:%s' % str(results))
     return { 'result':results, 'status':'success' }
 

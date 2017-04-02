@@ -4,6 +4,38 @@ __all__ = ['Event']
 
 import asyncio
 
+# for Event.driving:
+#   FAIL_STOP_ALL : if someone fail, stop all tasks
+#   FAIL_STOP_ONE : if someone fail, stop tasks depend on it
+FAIL_STOP_ALL, FAIL_STOP_ONE = 0,1
+
+def topoNext(graph):
+    """topoNext is a generator, return ready nodes of graph by topological order.
+    graph is a dict:
+             Node             Succeed       Deps Count
+             'a'       :       ['c']            0
+             'b'       :       ['c']            0
+             'c'       :       []               2
+    """
+    ready = []
+    for item in graph:
+        if graph[item][1] == 0:
+            ready.append(item)
+    while(True):
+        done = yield ready
+        ready.clear()
+        for item in done:
+            for succ in graph[item][0]:
+                graph[succ][1] = graph[succ][1]-1
+                if graph[succ][1] == 0:
+                    ready.append(succ)
+            # graph[item] is done, it will not be used
+            del graph[item]
+        # graph is empty, stop the generator
+        # if there is a cycle in graph, the generator will run forever
+        if len(graph) == 0:
+            break
+
 class Event(object):
     count = 0
     def __init__(self, name, paras, master, eventid = None):
@@ -18,71 +50,13 @@ class Event(object):
         self.cmd_cnt = 0
         self.paras = paras
 
-    async def run_without_rollback(self, commands):
-        """run multi commands, commands is a dict
-        """
-        self.log.debug('run commands:%s', str(commands))
-        """
-            commands :
-                'a':('node-1', 'act-1', 'para-1', [])
-                'b':('node-2', 'act-2', 'para-2', [])
-                'c':('node-3', 'act-3', 'para-3', ['a', 'b'])
-            build graph from commands:
-                command name       succeed       deps count
-                 'a'               ['c']            0
-                 'b'               ['c']            0
-                 'c'               []               2
-        """
-        graph = {}
-        ready = []
-        tasknames, pendtasks, results = {}, [], {}
-        for key in commands:
-            graph[key] = [ [], 0 ]
-        for key in commands:
-            deps = commands[key][3]
-            graph[key][1] = len(deps)
-            if graph[key][1] == 0:
-                ready.append(key)
-            for dep in deps:
-                graph[dep][0].append(key)
-        self.log.debug('graph:%s', str(graph))
-        """
-            ready is tasks ready to run
-            pendtasks is tasks running
-            so, 
-                step 1: run the ready tasks
-                step 2: wait for some task finish and update ready queue
-        """
-        while(ready or pendtasks):
-            self.log.debug('ready:%s', str(ready))
-            self.log.debug('pendtasks:%s', str(pendtasks))
-            for x in ready:
-                self.log.debug('create task for:%s', str(commands[x]))
-                task = asyncio.ensure_future(self.run_command(commands[x][:3]))
-                tasknames[task] = x
-                pendtasks.append(task)
-            ready.clear()
-            if pendtasks:
-                self.log.debug('wait for:%s', str(pendtasks))
-                done, pend = await asyncio.wait(pendtasks, return_when=asyncio.FIRST_COMPLETED)
-                self.log.debug('task done:%s', str(done))
-                for task in done:
-                    pendtasks.remove(task)
-                    name = tasknames[task]
-                    results[name] = task.result()
-                    for succ in graph[name][0]:
-                        graph[succ][1] = graph[succ][1]-1
-                        if graph[succ][1] == 0:
-                            ready.append(succ)
-        self.log.debug('result:%s', str(results))
-        return results
-
     async def run(self, commands, rollback=False, command_timeout=30, command_retry=3):
         """run multi commands, commands is a dict
         Now, we only support worker to undo actions
         so, rollback only could be used when the event is to send commands to workers
         """
         self.log.debug('run commands:%s', str(commands))
+        self.log.info('run commands:%s', str(commands))
         """
             commands :
                 'a':('node-1', 'act-1', 'para-1', [])
@@ -104,63 +78,25 @@ class Event(object):
             for dep in deps:
                 graph[dep][0].append(key)
         self.log.debug('graph:%s', str(graph))
-        """
-            ready is tasks ready to run
-            pendtasks is tasks running
-            so, 
-                step 1: run the ready tasks
-                step 2: wait for some task finish and update ready queue
-            if some task runs failed:
-                if rollback is False, the tasks depending on it will not run
-                if rollback is True, all done tasks will be undo
-            by the way, if some task failed, it means the event/action on the
-            remote node is failed. And the remote event/action should clear the 
-            things it has done
-        """
-        tasknames, ready, pendtasks, results = {}, [], [], {}
-        for key in commands:
-            if graph[key][1] == 0:
-                ready.append(key)
-        stop = False
-        while(ready or pendtasks):
-            self.log.debug('ready:%s', str(ready))
-            self.log.debug('pendtasks:%s', str(pendtasks))
-            for x in ready:
-                self.log.debug('create task for:%s', str(commands[x]))
-                task = asyncio.ensure_future(self.run_command(commands[x][:3], timeout=command_timeout, retry=command_retry))
-                tasknames[task] = x
-                pendtasks.append(task)
-            ready.clear()
-            if pendtasks:
-                self.log.debug('wait for:%s', str(pendtasks))
-                done, pend = await asyncio.wait(pendtasks, return_when=asyncio.FIRST_COMPLETED)
-                self.log.debug('task done:%s', str(done))
-                for task in done:
-                    pendtasks.remove(task)
-                    name = tasknames[task]
-                    results[name] = task.result()
-                    result = task.result()
-                    if stop or ('status' not in result) or (result['status'] != 'success'):
-                        if rollback:
-                            stop = True
-                        continue
-                    for succ in graph[name][0]:
-                        graph[succ][1] = graph[succ][1]-1
-                        if graph[succ][1] == 0:
-                            ready.append(succ)
-        for key in graph:
-            if graph[key][1]!=0:
-                results[key] = {'status':'wait', 'result':'dependent commands run failed or not run or some command failed with rollback mode'}
+        self.log.info('graph:%s', str(graph))
+        if rollback:
+            stop = FAIL_STOP_ALL
+        else:
+            stop = FAIL_STOP_ONE
+        (hasfail, results) = await self.driving(commands, graph, undo=False, command_timeout=command_timeout, command_retry=command_retry, stop=stop)
+        self.log.info('run result:%s', str(results))
+        if not hasfail or not rollback:
+            return results
+        self.log.debug('RollBack begin ...')
+        self.log.info('RollBack begin ...')
         """command result and its rollback action:
             STATUS          RESULT            ROLLBACK
             -------         -------           ---------
             success         result            undo
             wait            not run           --
-            *timeout         timeout           ?? (for timeout, when rollback, undo it or nothing)
+            timeout         timeout           -- 
             undo            undo              --
             fail            fail              --
-
-        * means we donot support now
         """
         """for rollback: rollback the successful commands:
             commands :
@@ -176,12 +112,6 @@ class Event(object):
                  'c'               ['a','b']        0
             based on the back graph and topological sorting, we can rollback commands in correct sequence
         """
-        if not stop:
-            self.log.debug('result:%s', str(results))
-            return results
-        # stop==True means rollback and some command runs failed
-        # now, do rollback work
-        self.log.debug('RollBack begin ...')
         undocmds = []
         for key in results:
             if results[key]['status']=='success':
@@ -194,36 +124,61 @@ class Event(object):
             for dep in deps:
                 backgraph[key][0].append(dep)
                 backgraph[dep][1] = backgraph[dep][1]+1
-        tasknames, ready, pendtasks = {}, [], []
-        for key in undocmds:
-            if backgraph[key][1] == 0:
-                ready.append(key)
+        self.log.info('back graph:%s', str(backgraph))
+        (hasfail, undoresults) = await self.driving(commands, backgraph, undo=True, command_timeout=command_timeout, command_retry=command_retry, stop=FAIL_STOP_ONE)
+        self.log.info('undo result:%s', str(results))
+        for key in undoresults:
+            results[key] = {'status':'undo', 'result':undoresults[key]}
+        self.log.info('final result:%s', str(results))
+        return results
+    
+    async def driving(self, commands, graph, undo=False, command_timeout=30, command_retry=3, stop=FAIL_STOP_ONE):
+        if len(graph) == 0:
+            return (False, {})
+        needrun = list(graph.keys())
+        toporun = topoNext(graph)
+        ready = toporun.send(None)
+        pendtasks = []
+        tasknames, results = {}, {}
+        hasfail = False
         while(ready or pendtasks):
-            self.log.debug('ready:%s', str(ready))
-            self.log.debug('pendtasks:%s', str(pendtasks))
+            self.log.debug('ready tasks:%s', str(ready))
+            self.log.debug('pend tasks:%s', str(pendtasks))
             for x in ready:
-                node, cmd, paras, _ = commands[x]
-                command = (node, 'undo@'+cmd, paras)
-                self.log.debug('create task for:%s', str(command))
-                task = asyncio.ensure_future(self.run_command(command, timeout=command_timeout, retry=command_retry))
+                node, cmd, paras = commands[x][:3]
+                if undo:
+                    cmd = 'undo@'+cmd
+                self.log.debug('create task for (%s, %s, %s)', node, cmd, paras)
+                task = asyncio.ensure_future(self.run_command((node, cmd, paras), timeout=command_timeout, retry=command_retry))
                 tasknames[task] = x
                 pendtasks.append(task)
             ready.clear()
-            if pendtasks:
-                self.log.debug('wait for:%s', str(pendtasks))
-                done, pend = await asyncio.wait(pendtasks, return_when=asyncio.FIRST_COMPLETED)
-                self.log.debug('task done:%s', str(done))
-                for task in done:
-                    pendtasks.remove(task)
-                    name = tasknames[task]
-                    results[name] = {'status':'undo', 'result':task.result()}
-                    for prec in backgraph[name][0]:
-                        backgraph[prec][1] = backgraph[prec][1]-1
-                        if backgraph[prec][1] == 0:
-                            ready.append(prec)
-
-        self.log.debug('result:%s', str(results))
-        return results
+            if not pendtasks:
+                continue
+            self.log.debug('wait for:%s', str(pendtasks))
+            done, pend = await asyncio.wait(pendtasks, return_when=asyncio.FIRST_COMPLETED)
+            self.log.debug('task done:%s', str(done))
+            success = []
+            for task in done:
+                pendtasks.remove(task)
+                name = tasknames[task]
+                result = task.result()
+                if 'status' not in result:
+                    result = {'status':'fail', 'result':result}
+                results[name] = result
+                if result['status'] != 'success':
+                    hasfail = True
+                else:
+                    success.append(name)
+            if not hasfail or (hasfail and stop == FAIL_STOP_ONE):
+                try:
+                    ready = toporun.send(success)
+                except StopIteration:
+                    ready = []
+        for key in needrun:
+            if key not in results:
+                results[key] = {'status':'wait', 'result':'dependent commands not run success'}
+        return (hasfail, results)
 
     async def run_command(self, command, timeout=30, retry=1, retry_if_fail=False):
         """run one command, command : (node, command, parameters)
@@ -233,12 +188,12 @@ class Event(object):
         if len(command) != 3:
             return {'status':'fail', 'result':'command not valid'}
         node, cmd, paras = command
-        self.cmd_cnt = self.cmd_cnt + 1
-        cmd_id = str(self.id) + '-' + str(self.cmd_cnt)
-        self.log.debug('run command: %s with id: %s', str(command), str(cmd_id))
         if retry <= 0:
             retry = 1
         for i in range(retry):
+            self.cmd_cnt = self.cmd_cnt + 1
+            cmd_id = str(self.id) + '-' + str(self.cmd_cnt)
+            self.log.debug('run command: %s with id: %s', str(command), str(cmd_id))
             result = await self.master.send_command(node, cmd, paras, cmd_id, timeout=timeout)
             if result['status'] == 'timeout' or (retry_if_fail and result['status'] == 'fail'):
                 pass

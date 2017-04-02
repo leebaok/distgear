@@ -18,23 +18,25 @@ worker = distgear.Worker(name, debug=False)
 @worker.doAction('myaction')
 async def testaction(paras):
     print('Worker: myaction with parameters: %s' % str(paras))
-    time = random.randint(0,5)
-    print('Worker: myaction need time : %s' % str(time))
+    time = paras['time']
+    name = paras['name']
+    ret = paras['ret']
     await asyncio.sleep(time)
-    if paras=='d':
-        result = {'status':'fail', 'result':'test fail'}
-    else:
-        result = {'status':'success', 'result':'action done'}
+    result = {'status':ret, 'result':'do command: '+name}
     print('Worker: myaction with result: %s' % str(result))
     return result
 
 @worker.undoAction('myaction')
 async def testundoaction(paras):
     print('Worker: undo myaction with parameters: %s' % str(paras))
-    await asyncio.sleep(random.randint(0,2))
-    result = {'status':'success', 'result':'undo action'}
+    time = paras['time']
+    name = paras['name']
+    ret = paras['ret']
+    await asyncio.sleep(time)
+    result = {'status':ret, 'result':'undo command: '+name}
     print('Worker: undo myaction with result: %s' % str(result))
     return result
+
 
 
 worker.start()

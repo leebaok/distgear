@@ -70,7 +70,7 @@ async def heartbeat(event, master):
             logger.warning('get node:%s heartbeat and info failed', node)
             await master.processEvent({'event':'@NodeLost', 'parameters':{'node':node}})
     logger.debug('Worker info:%s', str(master.get_nodeinfo()))
-    master.raiseEvent({'event':'@HeartBeat', 'parameters':None}, delay=5)
+    master.raiseEvent({'event':'@HeartBeat', 'parameters':None}, delay=20)
     # heartbeat is raised by raiseEvent. its return is nouse.
     # but the return is necessary. because raiseEvent will call processEvent 
     # and processEvent need event to return result
