@@ -127,6 +127,7 @@ class BaseMaster(object):
             task.cancel()
         self.loop.run_until_complete(asyncio.wait(list(tasks)))
         self.loop.close()
+        self.zmq_ctx.destroy(linger=0)
 
     def get_nodes(self):
         nodes = [ node for node in self.nodes ]
@@ -274,6 +275,7 @@ class SuperMaster(BaseMaster):
 
 
 async def nodeinfo(event, master):
+    master.log.debug('report node info to upper master:%s', str(master.get_nodeinfo()))
     return {'status':'success', 'result':master.get_nodeinfo()}
 
 class Master(BaseMaster):

@@ -33,8 +33,6 @@ class Worker(object):
         self.sub_sock.connect('tcp://'+self.master_pub_addr)
         # set SUB topic is necessary (otherwise, no message will be received)
         self.sub_sock.setsockopt(zmq.SUBSCRIBE, str.encode(self.name))
-        # 'all' event maybe not supported. because the result is not easy to collect
-        #self.sub_sock.setsockopt(zmq.SUBSCRIBE, str.encode('all'))
         self.push_sock = self.zmq_ctx.socket(zmq.PUSH)
         self.push_sock.connect('tcp://'+self.master_pull_addr)
         asyncio.ensure_future(self._sub_in())
@@ -58,9 +56,13 @@ class Worker(object):
             task.cancel()
         self.loop.run_until_complete(asyncio.wait(list(tasks)))
         self.loop.close()
-        #self.sub_sock.close()
-        #self.push_sock.close()
-        #self.zmq_ctx.destroy()
+        # zmq context destroy will wait for all sockets close and all 
+        # messages sended. But when remote connecting address is not alive,
+        # the connecting and sending will retry forever, for example,
+        # _try_join failed, sending and connecting will retry again and again.
+        # So, we need use 'linger' to set the timeout of destroy. 
+        # Here, we set linger=0 to destroy all resource of zmq immediately
+        self.zmq_ctx.destroy(linger=0)
 
     async def _try_join(self):
         """try to join master/controller.
