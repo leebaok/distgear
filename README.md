@@ -31,3 +31,10 @@ event handler and DistGear drives your events.
                                         +-------------+
 
 Handler is defined by You. Others are DistGear's job.
+
+## Install
+```
+pip3 install .
+```
+
+
