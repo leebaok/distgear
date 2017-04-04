@@ -6,10 +6,10 @@ import random
 sys.path.append("..")
 import distgear
 
-supermaster = distgear.SuperMaster('supermaster', debug=False)
+primary = distgear.PrimaryMaster('supermaster', debug=False)
 
 # define handlers for master
-@supermaster.handleEvent('myevent')
+@primary.handleEvent('myevent')
 async def testevent(event, master):
     print('SuperMaster: do myevent')
     nodes = list(master.nodeinfo.keys())
@@ -20,4 +20,4 @@ async def testevent(event, master):
     print('SuperMaster: result:%s' % str(result))
     return result
 
-supermaster.start()
+primary.start()

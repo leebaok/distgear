@@ -6,10 +6,10 @@ import random
 sys.path.append("..")
 import distgear
 
-master = distgear.Master('master', debug=False)
+secondary = distgear.SecondaryMaster('master', debug=False)
 
 # define handlers for master
-@master.handleEvent('subevent')
+@secondary.handleEvent('subevent')
 async def testevent(event, master):
     print('Master: subevent')
     nodes = list(master.nodeinfo.keys())
@@ -18,14 +18,14 @@ async def testevent(event, master):
     node = nodes[random.randint(0, len(nodes)-1)]
     commands = {
             'a':(node, 'myaction', {'time':1,'name':'a','ret':'success'}, []), 
-            'b':(node, 'myaction', {'time':1,'name':'b','ret':'success'}, []), 
+            'b':(node, 'myaction', {'time':3,'name':'b','ret':'success'}, []), 
             'c':(node, 'myaction', {'time':1,'name':'c','ret':'success'}, ['a','b']), 
-            'd':(node, 'myaction', {'time':5,'name':'d','ret':'success'}, ['c']), 
-            'e':(node, 'myaction', {'time':1,'name':'e','ret':'success'}, []), 
+            'd':(node, 'myaction', {'time':2,'name':'d','ret':'success'}, ['c']), 
+            'e':(node, 'myaction', {'time':4,'name':'e','ret':'success'}, []), 
             'f':(node, 'myaction', {'time':1,'name':'f','ret':'success'}, ['d','e']), 
             }
-    results = await event.run(commands, rollback=True, command_timeout=2, command_retry=3)
+    results = await event.run(commands, rollback=True, command_timeout=5, command_retry=3)
     print('Master: subevent with result:%s' % str(results))
     return { 'result':results, 'status':'success' }
 
-master.start()
+secondary.start()

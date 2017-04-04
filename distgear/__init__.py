@@ -3,7 +3,7 @@
     DistGear Module
     ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-             Master                Controller               Worker
+         PrimaryMaster          SecondaryMaster             Worker
          +-----------+           +-----------+           +-----------+
          |   Event   |           |   Event   |           |  Action   |
          |  Handler  |           |  Handler  |           |  Handler  |
@@ -28,7 +28,7 @@
 
 __version__ = '0.1-dev'
 
-from .master import Master, SuperMaster
+from .master import PrimaryMaster, SecondaryMaster
 from .worker import Worker
 
 __all__ = ( master.__all__ +

@@ -1,12 +1,15 @@
 # -*- coding: utf-8 -*-
 
-__all__ = ['Master', 'SuperMaster']
+__all__ = ['PrimaryMaster', 'SecondaryMaster']
 
 import asyncio
-from aiohttp import web 
-import zmq.asyncio
 import copy
 import json
+from concurrent.futures import CancelledError
+import functools
+
+from aiohttp import web 
+import zmq.asyncio
 
 from .log import createLogger
 from .event import Event
@@ -61,7 +64,7 @@ async def heartbeat(event, master):
     commands={}
     for node in nodes:
         commands[node] = (node, '@nodeinfo', None, [])
-    results = await event.run(commands, command_timeout=1, command_retry=2)
+    results = await event.run(commands, command_timeout=2, command_retry=2)
     for node in nodes:
         ret = results[node]
         if ret.get('status', 'fail') == 'success' and 'result' in ret:
@@ -70,7 +73,7 @@ async def heartbeat(event, master):
             logger.warning('get node:%s heartbeat and info failed', node)
             await master.processEvent({'event':'@NodeLost', 'parameters':{'node':node}})
     logger.debug('Worker info:%s', str(master.get_nodeinfo()))
-    master.raiseEvent({'event':'@HeartBeat', 'parameters':None}, delay=20)
+    master.raiseEvent({'event':'@HeartBeat', 'parameters':None}, delay=5)
     # heartbeat is raised by raiseEvent. its return is nouse.
     # but the return is necessary. because raiseEvent will call processEvent 
     # and processEvent need event to return result
@@ -190,7 +193,12 @@ class BaseMaster(object):
         call the lambda function to put its result to the future
         """
         task = asyncio.ensure_future(self.processEvent(eventinfo))
-        task.add_done_callback(lambda thistask: future.set_result(thistask.result()))
+        def setfuture(future, task):
+            try:
+                future.set_result(task.result())
+            except CancelledError:
+                future.set_result({'status':'fail', 'result':'task is cannelled'})
+        task.add_done_callback(functools.partial(setfuture, future))
 
     def raiseEvent(self, eventinfo, delay=0):
         """create a new task to process event after delay seconds.
@@ -254,7 +262,7 @@ class BaseMaster(object):
             return func
         return decorator
 
-class SuperMaster(BaseMaster):
+class PrimaryMaster(BaseMaster):
     """SuperMaster
                +-----------+
                |   Event   |
@@ -301,7 +309,7 @@ async def nodeinfo(event, master):
     master.log.debug('report node info to upper master:%s', str(master.get_nodeinfo()))
     return {'status':'success', 'result':master.get_nodeinfo()}
 
-class Master(BaseMaster):
+class SecondaryMaster(BaseMaster):
     """SuperMaster
                 +-----------+
                 |   Event   |

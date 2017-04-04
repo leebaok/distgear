@@ -3,8 +3,9 @@
 __all__ = ['Worker']
 
 import asyncio
-import zmq.asyncio
+
 import psutil
+import zmq.asyncio
 
 from .log import createLogger
 from .utils import zmq_send, zmq_recv

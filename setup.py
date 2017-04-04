@@ -25,6 +25,7 @@ setup(
     install_requires = [
         'aiohttp>=1.2',
         'pyzmq>=15.0',
+        'psutil>=5.0',
     ],
     classifiers = [
         'Development Status :: 3 - Alpha',
