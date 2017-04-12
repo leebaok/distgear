@@ -90,10 +90,10 @@ class BaseMaster(object):
        ??         PULL <--- events,results ----
         +-----------+
     """
-    def __init__(self, name, pub_addr='0.0.0.0:8001', pull_addr='0.0.0.0:8002', debug=False):
+    def __init__(self, name, logpath='.', pub_addr='0.0.0.0:8001', pull_addr='0.0.0.0:8002', debug=False):
         self.name = name
         # init logger
-        self.log = createLogger(name = name, debug = debug)
+        self.log = createLogger(name = name, logpath=logpath, debug = debug, std_to_log=True)
         # init publish and pull sockets 
         self.pub_addr = pub_addr
         self.pull_addr = pull_addr
@@ -273,10 +273,10 @@ class PrimaryMaster(BaseMaster):
                |         PULL <--- events,results ----
                +-----------+
     """
-    def __init__(self, name, http_addr='0.0.0.0:8000', pub_addr='0.0.0.0:8001', pull_addr='0.0.0.0:8002', debug=False):
+    def __init__(self, name, logpath='.', http_addr='0.0.0.0:8000', pub_addr='0.0.0.0:8001', pull_addr='0.0.0.0:8002', debug=False):
         """Master add a http server based on BaseMaster
         """
-        BaseMaster.__init__(self, name, pub_addr=pub_addr, pull_addr=pull_addr, debug=debug)
+        BaseMaster.__init__(self, name, logpath=logpath, pub_addr=pub_addr, pull_addr=pull_addr, debug=debug)
         self.http_addr = http_addr
         addr, port = http_addr.split(':')
         server = web.Server(self._http_handler)
@@ -289,8 +289,10 @@ class PrimaryMaster(BaseMaster):
         we handle the event 
         """
         self.log.debug('url:%s', str(request.url))
+        self.log.info('url:%s', str(request.url))
         text = await request.text()
         self.log.debug('request content:%s', text)
+        self.log.info('request content:%s', text)
         data = None
         try:
             data = json.loads(text)
@@ -320,8 +322,8 @@ class SecondaryMaster(BaseMaster):
     results <- PUSH       PULL <--- events,results ----
                 +-----------+
     """
-    def __init__(self, name, upper_pub_addr='0.0.0.0:8001', upper_pull_addr='0.0.0.0:8002', my_pub_addr='0.0.0.0:8003', my_pull_addr='0.0.0.0:8004', debug=False):
-        BaseMaster.__init__(self, name=name, pub_addr=my_pub_addr, pull_addr=my_pull_addr, debug=debug)
+    def __init__(self, name, logpath='.', upper_pub_addr='0.0.0.0:8001', upper_pull_addr='0.0.0.0:8002', my_pub_addr='0.0.0.0:8003', my_pull_addr='0.0.0.0:8004', debug=False):
+        BaseMaster.__init__(self, name=name, logpath=logpath, pub_addr=my_pub_addr, pull_addr=my_pull_addr, debug=debug)
         self.sub_sock = self.zmq_ctx.socket(zmq.SUB)
         self.sub_sock.connect('tcp://'+upper_pub_addr)
         self.sub_sock.setsockopt(zmq.SUBSCRIBE, str.encode(self.name))

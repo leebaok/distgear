@@ -18,9 +18,9 @@ async def nodeinfo(paras):
     return { 'status':'success', 'result': {'mem':memload, 'cpu':cpuload} }
 
 class Worker(object):
-    def __init__(self, name, master_pub_addr='127.0.0.1:8003', master_pull_addr='127.0.0.1:8004', debug=False):
+    def __init__(self, name, logpath='.', master_pub_addr='127.0.0.1:8003', master_pull_addr='127.0.0.1:8004', debug=False):
         # init logger 
-        self.log = createLogger(name=name, debug=debug)
+        self.log = createLogger(name=name, logpath=logpath, debug=debug, std_to_log=True)
         # init base configurations
         self.name = name
         self.status = 'waiting'

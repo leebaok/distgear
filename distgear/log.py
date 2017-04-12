@@ -4,14 +4,14 @@ import logging
 import logging.handlers
 import sys
 
-def createLogger(name='distgear', debug=False, std_to_log=False):
+def createLogger(name='distgear', logpath='.', debug=False, std_to_log=False):
     logger = logging.getLogger(name)
     loglevel = logging.DEBUG if debug else logging.INFO
     logger.setLevel(loglevel)
-    #path = '.'
-    #logfile = path+'/'+name+'.log'
-    #handler = logging.handlers.TimedRotatingFileHandler(logfile, when="midnight", backupCount=loglevel)
-    handler = logging.StreamHandler(stream=sys.stdout)
+    path = logpath
+    logfile = path+'/'+name+'.log'
+    handler = logging.handlers.TimedRotatingFileHandler(logfile, when="midnight", backupCount=10, encoding='utf-8')
+    #handler = logging.StreamHandler(stream=sys.stdout)
     formatter = logging.Formatter("%(asctime)s %(levelname)-8s %(module)s %(funcName)s [%(lineno)d] %(message)s")
     handler.setFormatter(formatter)
     logger.addHandler(handler)
